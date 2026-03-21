@@ -267,6 +267,8 @@ with st.sidebar:
     st.markdown("## ⚙️ Filtreler")
     st.success("✅ API key'ler hazır")
 
+    # ── Ücretsiz planda çalışan ligler (football-data.org) ──
+    # 2. ligler ücretli plan gerektirir (49€/ay) — sadece 1. ligler ücretsiz
     LEAGUE_GROUPS = {
         "🌍 Avrupa Kulüp": {
             "UEFA Champions League ⭐": "CL",
@@ -274,48 +276,30 @@ with st.sidebar:
             "UEFA Conference League":   "ECL",
         },
         "🏴󠁧󠁢󠁥󠁮󠁧󠁿 İngiltere": {
-            "Premier League (1. Lig)":  "PL",
-            "Championship (2. Lig)":    "ELC",
-            "League One (3. Lig)":      "EL1",
-            "League Two (4. Lig)":      "EL2",
+            "Premier League":           "PL",
+            "Championship (2. Lig) ✅": "ELC",  # İngiltere 2. ligi ücretsiz!
             "FA Cup":                   "FAC",
-            "Carabao Cup (EFL)":        "ELC",
         },
         "🇪🇸 İspanya": {
-            "La Liga (1. Lig)":         "PD",
-            "Segunda División (2. Lig)":"SD",
-            "Copa del Rey":             "CDR",
+            "La Liga":                  "PD",
         },
         "🇩🇪 Almanya": {
-            "Bundesliga (1. Lig)":      "BL1",
-            "2. Bundesliga":            "BL2",
-            "3. Bundesliga":            "BL3",
-            "DFB-Pokal":                "DFB",
+            "Bundesliga":               "BL1",
         },
         "🇮🇹 İtalya": {
-            "Serie A (1. Lig)":         "SA",
-            "Serie B (2. Lig)":         "SB",
-            "Coppa Italia":             "CIT",
+            "Serie A":                  "SA",
         },
         "🇫🇷 Fransa": {
-            "Ligue 1 (1. Lig)":         "FL1",
-            "Ligue 2 (2. Lig)":         "FL2",
-            "Coupe de France":          "CDL",
+            "Ligue 1":                  "FL1",
         },
         "🇳🇱 Hollanda": {
-            "Eredivisie (1. Lig)":      "DED",
-            "Eerste Divisie (2. Lig)":  "ED",
-            "KNVB Beker":               "NLC",
+            "Eredivisie":               "DED",
         },
         "🇵🇹 Portekiz": {
-            "Primeira Liga (1. Lig)":   "PPL",
-            "Liga Portugal 2 (2. Lig)": "PL2",
-            "Taça de Portugal":         "TAC",
+            "Primeira Liga":            "PPL",
         },
         "🇧🇷 Brezilya": {
-            "Série A (1. Lig)":         "BSA",
-            "Série B (2. Lig)":         "BSB",
-            "Copa do Brasil":           "BRC",
+            "Série A":                  "BSA",
         },
         "🌐 Milli Takım": {
             "FIFA World Cup":           "WC",
@@ -325,7 +309,15 @@ with st.sidebar:
 
     sel_group = st.selectbox("Kategori", list(LEAGUE_GROUPS.keys()))
     sel_label = st.selectbox("Lig", list(LEAGUE_GROUPS[sel_group].keys()))
-    sel_code  = LEAGUE_GROUPS[sel_group][sel_label]
+    sel_code  = LEAGUE_GROUPS[sel_group][sel_label].split("#")[0].strip()
+
+    st.info(
+        "ℹ️ **2. ligler neden yok?**\n\n"
+        "football-data.org ücretsiz planda yalnızca belirli 1. ligler ve "
+        "İngiltere Championship dahil. 2. Bundesliga, Serie B, Ligue 2, "
+        "Segunda División vb. 49€/ay ücretli plan gerektiriyor. "
+        "Ücretsiz planda mevcut olan ligler yukarıda listelenmiştir."
+    )
     sel_date  = st.date_input("Tarih", value=date.today())
     max_match = st.slider("Maks Maç", 1, 15, 8)
     n_form    = st.slider("Form Maç Sayısı", 5, 12, 8)
@@ -542,88 +534,63 @@ def compute_stats(ms_mat, ht_mat):
 
 def build_prompt(h, a, hf, af, h2h, hxg, axg, h_htxg, a_htxg,
                  stats, h_stand, a_stand, h_sc, a_sc, top_ms, top_ht):
-    fv  = lambda d,k,dv=0: d.get(k,dv) if d else dv
-    fl  = lambda d,k: " | ".join((d.get(k,[]) if d else [])[:5])
-    hs  = h_stand or {}; as_ = a_stand or {}
+    """Kısa ama yeterli prompt — token limitini aşmamak için kompakt."""
+    fv = lambda d,k,dv=0: d.get(k,dv) if d else dv
+    hs = h_stand or {}; as_ = a_stand or {}
 
-    # Maç karakteri
+    # Maç karakteri (sadece önemli olanlar)
     chars = []
     diff = round(hxg - axg, 2)
-    if diff > 0.5:    chars.append(f"EV FAVORİ xG +{diff} ({hxg} vs {axg})")
-    elif diff < -0.5: chars.append(f"DEP FAVORİ xG +{abs(diff)} ({axg} vs {hxg})")
-    else:             chars.append(f"DENGE MAÇI xG yakın ({hxg} vs {axg})")
-
+    if diff > 0.6:    chars.append(f"EV FAVORİ xG+{diff}")
+    elif diff < -0.6: chars.append(f"DEP FAVORİ xG+{abs(diff)}")
+    else:             chars.append(f"DENGE xG={hxg}vs{axg}")
     hp=fv(hf,"pts5"); ap=fv(af,"pts5")
-    if hp>=12: chars.append(f"{h} ÇOK İYİ FORMDA ({hp}/15)")
-    elif hp<=4: chars.append(f"{h} KÖTÜ FORMDA ({hp}/15)")
-    if ap>=12: chars.append(f"{a} ÇOK İYİ FORMDA ({ap}/15)")
-    elif ap<=4: chars.append(f"{a} KÖTÜ FORMDA ({ap}/15)")
-    if fv(hf,"st_pct",55)>=60: chars.append(f"{h} 2Y TAKIM (%{fv(hf,'st_pct',55)} gol 2Y'de) → 2/1 zemini")
-    if fv(af,"st_pct",55)>=60: chars.append(f"{a} 2Y TAKIM (%{fv(af,'st_pct',55)} gol 2Y'de) → 1/2 zemini")
-    if h2h.get("rev21_pct",0)>=25: chars.append(f"H2H 2/1 PATTERN %{h2h['rev21_pct']} ({h2h['rev21']}/{h2h['n']} maç)")
-    if h2h.get("rev12_pct",0)>=25: chars.append(f"H2H 1/2 PATTERN %{h2h['rev12_pct']} ({h2h['rev12']}/{h2h['n']} maç)")
-    if fv(hf,"cs",0)>=3: chars.append(f"{h} SAĞLAM SAVUNMA {fv(hf,'cs')}/{fv(hf,'n')} kuru kaldı")
-    if fv(af,"avg_gc",0)>=2.0: chars.append(f"{a} SAVUNMA DELIĞI {fv(af,'avg_gc')} gol/maç yiyor")
-    if fv(hf,"avg_gf",0)>=2.2: chars.append(f"{h} GOL MAKİNESİ {fv(hf,'avg_gf')} gol/maç atıyor")
-    if hs.get("position",10)>=16: chars.append(f"DÜŞME TEHLİKESİ {h} ligde {hs.get('position')}. sırada")
-    if as_.get("position",10)>=16: chars.append(f"DÜŞME TEHLİKESİ {a} ligde {as_.get('position')}. sırada")
+    if hp>=12: chars.append(f"{h} SÜPER FORM {hp}/15")
+    elif hp<=4: chars.append(f"{h} KÖTÜ {hp}/15")
+    if ap>=12: chars.append(f"{a} SÜPER FORM {ap}/15")
+    elif ap<=4: chars.append(f"{a} KÖTÜ {ap}/15")
+    if fv(hf,"st_pct",55)>=62: chars.append(f"{h} 2Y_TAKIM(%{fv(hf,'st_pct',55)})")
+    if fv(af,"st_pct",55)>=62: chars.append(f"{a} 2Y_TAKIM(%{fv(af,'st_pct',55)})")
+    if h2h.get("rev21_pct",0)>=25: chars.append(f"H2H_2/1=%{h2h['rev21_pct']}")
+    if h2h.get("rev12_pct",0)>=25: chars.append(f"H2H_1/2=%{h2h['rev12_pct']}")
+    if fv(hf,"cs",0)>=3: chars.append(f"{h} SAĞLAM_SAVUNMA {fv(hf,'cs')}/{fv(hf,'n')}CS")
+    if fv(af,"avg_gc",0)>=2.0: chars.append(f"{a} SIFIR_SAVUNMA {fv(af,'avg_gc')}yenen")
+    if hs.get("position",10)>=16: chars.append(f"{h} DÜŞME_ZONu sıra:{hs.get('position')}")
+    if as_.get("position",10)>=16: chars.append(f"{a} DÜŞME_ZONu sıra:{as_.get('position')}")
 
-    return f"""Sen bir profesyonel futbol bahis analistsin.
-Bu maça ÖZEL, gerçek verilere dayalı, takım isimlerini ve rakamları kullanan analiz yaz.
-Türkçe. Jenerik cümle YASAK. Her tahmin yüzdeli.
+    h_sc_str = f"{h_sc.get('name','?')}({h_sc.get('goals',0)}g)" if h_sc else "?"
+    a_sc_str = f"{a_sc.get('name','?')}({a_sc.get('goals',0)}g)" if a_sc else "?"
 
-MAÇIN KARAKTERİ:
-{"".join("▶ "+c+chr(10) for c in chars)}
-MAÇ: {h} (Ev) vs {a} (Dep)
-PUAN: {h} Sıra:{hs.get('position','?')} {hs.get('won','?')}G-{hs.get('draw','?')}B-{hs.get('lost','?')}M Gol:{hs.get('goalsFor','?')}-{hs.get('goalsAgainst','?')} P:{hs.get('points','?')}
-PUAN: {a} Sıra:{as_.get('position','?')} {as_.get('won','?')}G-{as_.get('draw','?')}B-{as_.get('lost','?')}M Gol:{as_.get('goalsFor','?')}-{as_.get('goalsAgainst','?')} P:{as_.get('points','?')}
-GOLCÜ: {h_sc.get('name','?') if h_sc else '?'} {h_sc.get('goals',0) if h_sc else 0}gol/{h_sc.get('assists',0) if h_sc else 0}ast | {a_sc.get('name','?') if a_sc else '?'} {a_sc.get('goals',0) if a_sc else 0}gol/{a_sc.get('assists',0) if a_sc else 0}ast
+    prompt = f"""Profesyonel futbol bahis analisti. Türkçe. Takım isimlerini kullan. Jenerik cümle yasak.
 
-{h} FORM(son {fv(hf,'n')} maç): {fv(hf,'form_str','?')} | {fv(hf,'pts5')}/15puan | Seri:{fv(hf,'streak','?')}
-  Son MS:{fl(hf,'ms_scores')} | Son İY:{fl(hf,'ht_scores')}
-  Gol:{fv(hf,'avg_gf')}attı/{fv(hf,'avg_gc')}yedi | İçSaha:{fv(hf,'h_avg_gf')}/{fv(hf,'h_avg_gc')}({fv(hf,'h_n')} maç)
-  İY:{fv(hf,'ht_avg_gf')}attı/{fv(hf,'ht_avg_gc')}yedi | 2Y:{fv(hf,'st_avg_gf')}attı/{fv(hf,'st_avg_gc')}yedi
-  GOL ZAMANI:%{fv(hf,'ht_pct',45)}İY %{fv(hf,'st_pct',55)}2Y | KG:{fv(hf,'btts')}/{fv(hf,'n')} | Üst25:{fv(hf,'o25')}/{fv(hf,'n')} | CS:{fv(hf,'cs')}/{fv(hf,'n')}
+KARAKTER: {" | ".join(chars)}
+MAÇ: {h}(Ev) vs {a}(Dep)
+PUAN: {h} S:{hs.get('position','?')} {hs.get('won','?')}G-{hs.get('draw','?')}B-{hs.get('lost','?')}M GolAV:{hs.get('goalDifference',0):+d} P:{hs.get('points','?')}
+PUAN: {a} S:{as_.get('position','?')} {as_.get('won','?')}G-{as_.get('draw','?')}B-{as_.get('lost','?')}M GolAV:{as_.get('goalDifference',0):+d} P:{as_.get('points','?')}
+GOLCÜ: {h_sc_str} | {a_sc_str}
+{h} FORM: {fv(hf,'form_str','?')} {fv(hf,'pts5')}/15 | Gol:{fv(hf,'avg_gf')}/{fv(hf,'avg_gc')} | İY:{fv(hf,'ht_avg_gf')}/{fv(hf,'ht_avg_gc')} | 2Y:{fv(hf,'st_avg_gf')}/{fv(hf,'st_avg_gc')} | %{fv(hf,'ht_pct',45)}İY-%{fv(hf,'st_pct',55)}2Y | KG:{fv(hf,'btts')}/{fv(hf,'n')} Üst25:{fv(hf,'o25')}/{fv(hf,'n')} CS:{fv(hf,'cs')}/{fv(hf,'n')} | SonMS:{" ".join((hf.get('ms_scores',[]) if hf else [])[:4])} İY:{" ".join((hf.get('ht_scores',[]) if hf else [])[:4])}
+{a} FORM: {fv(af,'form_str','?')} {fv(af,'pts5')}/15 | Gol:{fv(af,'avg_gf')}/{fv(af,'avg_gc')} Dep:{fv(af,'a_avg_gf')}/{fv(af,'a_avg_gc')} | İY:{fv(af,'ht_avg_gf')}/{fv(af,'ht_avg_gc')} | 2Y:{fv(af,'st_avg_gf')}/{fv(af,'st_avg_gc')} | %{fv(af,'ht_pct',45)}İY-%{fv(af,'st_pct',55)}2Y | KG:{fv(af,'btts')}/{fv(af,'n')} Üst25:{fv(af,'o25')}/{fv(af,'n')} CS:{fv(af,'cs')}/{fv(af,'n')} | SonMS:{" ".join((af.get('ms_scores',[]) if af else [])[:4])} İY:{" ".join((af.get('ht_scores',[]) if af else [])[:4])}
+H2H({h2h.get('n',0)}maç): {h} {h2h.get('hw',0)}G-{h2h.get('dr',0)}B-{h2h.get('aw',0)}M | İY:{h2h.get('ht_hw',0)}G-{h2h.get('ht_dr',0)}B-{h2h.get('ht_aw',0)}M | MS:{" ".join(h2h.get('ms_scores',[])[:4])} İY:{" ".join(h2h.get('ht_scores',[])[:4])} | Gol:{h2h.get('avg_goals',0)} Üst25:{h2h.get('o25_pct',0)}% KG:{h2h.get('btts_pct',0)}% | 2/1:{h2h.get('rev21',0)}/{h2h.get('n',0)}(%{h2h.get('rev21_pct',0)}) 1/2:{h2h.get('rev12',0)}/{h2h.get('n',0)}(%{h2h.get('rev12_pct',0)})
+MODEL: {h}xG={hxg}(İY:{h_htxg}) {a}xG={axg}(İY:{a_htxg}) | MS:1=%{stats['p1']} X=%{stats['px']} 2=%{stats['p2']} | İY:1=%{stats['iy1']} X=%{stats['iyx']} 2=%{stats['iy2']} | TopMS:{" ".join(f"{hg}-{ag}(%{round(v,1)})" for(hg,ag),v in top_ms[:5])} | TopİY:{" ".join(f"{hg}-{ag}(%{round(v,1)})" for(hg,ag),v in top_ht[:4])} | KG={stats['kg']}% Üst25={stats['u25']}% Üst35={stats['u35']}% | Kombo:{" ".join(f"{k}=%{round(v,1)}%" for k,v in stats['combos'][:5])} | Model2/1={stats['rev21']}% Model1/2={stats['rev12']}%
 
-{a} FORM(son {fv(af,'n')} maç): {fv(af,'form_str','?')} | {fv(af,'pts5')}/15puan | Seri:{fv(af,'streak','?')}
-  Son MS:{fl(af,'ms_scores')} | Son İY:{fl(af,'ht_scores')}
-  Gol:{fv(af,'avg_gf')}attı/{fv(af,'avg_gc')}yedi | Dep:{fv(af,'a_avg_gf')}/{fv(af,'a_avg_gc')}({fv(af,'a_n')} maç)
-  İY:{fv(af,'ht_avg_gf')}attı/{fv(af,'ht_avg_gc')}yedi | 2Y:{fv(af,'st_avg_gf')}attı/{fv(af,'st_avg_gc')}yedi
-  GOL ZAMANI:%{fv(af,'ht_pct',45)}İY %{fv(af,'st_pct',55)}2Y | KG:{fv(af,'btts')}/{fv(af,'n')} | Üst25:{fv(af,'o25')}/{fv(af,'n')} | CS:{fv(af,'cs')}/{fv(af,'n')}
-
-H2H(son {h2h.get('n',0)} maç):
-  MS: {h} %{h2h.get('hw_pct',0)} / X %{h2h.get('dr_pct',0)} / {a} %{h2h.get('aw_pct',0)}
-  İY: {h} %{h2h.get('ht_hw_pct',0)} / X %{h2h.get('ht_dr_pct',0)} / {a} %{h2h.get('ht_aw_pct',0)}
-  SonMS:{" | ".join(h2h.get('ms_scores',[])[:5])} | SonİY:{" | ".join(h2h.get('ht_scores',[])[:5])}
-  Gol:{h2h.get('avg_goals',0)} | Üst25:%{h2h.get('o25_pct',0)} | KGVAR:%{h2h.get('btts_pct',0)}
-  2/1:{h2h.get('rev21',0)}/{h2h.get('n',0)}(%{h2h.get('rev21_pct',0)}) | 1/2:{h2h.get('rev12',0)}/{h2h.get('n',0)}(%{h2h.get('rev12_pct',0)}) | X/1:%{h2h.get('revx1_pct',0)} | X/2:%{h2h.get('revx2_pct',0)}
-
-MODEL: {h} xG={hxg}(İY:{h_htxg}) | {a} xG={axg}(İY:{a_htxg}) | Toplam={round(hxg+axg,2)}
-  MS:1=%{stats['p1']} X=%{stats['px']} 2=%{stats['p2']}
-  İY:1=%{stats['iy1']} X=%{stats['iyx']} 2=%{stats['iy2']}
-  TopMS:{" | ".join(f"{hg}-{ag}(%{round(v,1)})" for(hg,ag),v in top_ms[:6])}
-  TopİY:{" | ".join(f"{hg}-{ag}(%{round(v,1)})" for(hg,ag),v in top_ht[:5])}
-  Kombolar:{" | ".join(f"{k}(%{round(v,1)})" for k,v in stats['combos'][:6])}
-  KGVAR=%{stats['kg']} | Üst25=%{stats['u25']} | Üst35=%{stats['u35']}
-  Model2/1=%{stats['rev21']} H2H2/1=%{h2h.get('rev21_pct',0)}
-  Model1/2=%{stats['rev12']} H2H1/2=%{h2h.get('rev12_pct',0)}
-
-GÖREV — BU FORMATTA YAZI (AYNEN KULLAN):
+AYNEN bu formatta yaz (başlıkları değiştirme):
 
 ### 1) EN OLASI İY SKORU
-[skor] (%[xx]) — [bu maça özgü kısa gerekçe]
+[skor] (%xx) — [bu maça özgü gerekçe, İY xG ve İY H2H bazlı]
 
 ### 2) EN OLASI MS SKORU
-[skor] (%[xx]) — [bu maça özgü kısa gerekçe]
+[skor] (%xx) — [xG, form, H2H bazlı gerekçe]
 
 ### 3) SENARYOLAR
-Her satır MUTLAKA şu formatta: İY [X-Y] → 2Y [X-Y] → MS [X-Y] | %[xx] | [kısa açıklama]
-En az 4 senaryo yaz.
+İY [X-Y] → 2Y [X-Y] → MS [X-Y] | %xx | [açıklama]
+İY [X-Y] → 2Y [X-Y] → MS [X-Y] | %xx | [açıklama]
+İY [X-Y] → 2Y [X-Y] → MS [X-Y] | %xx | [açıklama]
+İY [X-Y] → 2Y [X-Y] → MS [X-Y] | %xx | [açıklama]
 
 ### 4) MS 1/X/2
-1 (%{stats['p1']}): [bu maça özgü gerekçe]
-X (%{stats['px']}): [bu maça özgü gerekçe]
-2 (%{stats['p2']}): [bu maça özgü gerekçe]
+1 (%{stats['p1']}): [gerekçe]
+X (%{stats['px']}): [gerekçe]
+2 (%{stats['p2']}): [gerekçe]
 
 ### 5) GOL TAHMİNLERİ
 KG VAR (%{stats['kg']}): [gerekçe]
@@ -632,41 +599,29 @@ KG VAR (%{stats['kg']}): [gerekçe]
 3.5 ÜST (%{stats['u35']}): [gerekçe]
 
 ### 6) 2/1 DÖNÜŞ
-İY:{a} önde → MS:{h} kazanır
-Model: %{stats['rev21']} | H2H: %{h2h.get('rev21_pct',0)} ({h2h.get('rev21',0)}/{h2h.get('n',0)} maç)
-{h} 2Y gol yükü: %{fv(hf,'st_pct',55)} — [değerlendirme]
-Senaryo: [nasıl gerçekleşir?]
-NET KARAR: [gerçekçi mi?]
+Model: %{stats['rev21']} | H2H: %{h2h.get('rev21_pct',0)} ({h2h.get('rev21',0)}/{h2h.get('n',0)} maç) | {h} 2Y yükü: %{fv(hf,'st_pct',55)}
+Senaryo: [kısa]
+NET: [gerçekçi mi, neden?]
 
 ### 7) 1/2 DÖNÜŞ
-İY:{h} önde → MS:{a} kazanır
-Model: %{stats['rev12']} | H2H: %{h2h.get('rev12_pct',0)} ({h2h.get('rev12',0)}/{h2h.get('n',0)} maç)
-{a} 2Y gol yükü: %{fv(af,'st_pct',55)} — [değerlendirme]
-Senaryo: [nasıl gerçekleşir?]
-NET KARAR: [gerçekçi mi?]
+Model: %{stats['rev12']} | H2H: %{h2h.get('rev12_pct',0)} ({h2h.get('rev12',0)}/{h2h.get('n',0)} maç) | {a} 2Y yükü: %{fv(af,'st_pct',55)}
+Senaryo: [kısa]
+NET: [gerçekçi mi, neden?]
 
 ### 8) MAÇ ANALİZİ
-[Bu maçın hikayesi — 3-4 cümle, tamamen bu maçın verileriyle, jenerik cümle olmadan]
+[3 cümle — bu maçın spesifik hikayesi]
 
 ### 9) TAVSİYELER
-BANKO: [tahmin] — %[güven] — [gerekçe]
-ORTA: [tahmin] — %[güven] — [gerekçe]
+BANKO: [tahmin] — %xx — [gerekçe]
+ORTA: [tahmin] — %xx — [gerekçe]
 RİSKLİ: [tahmin] — [gerekçe]
-SKOR: İY [X-Y] + MS [X-Y] — [gerekçe]
+SKOR: İY [X-Y] + MS [X-Y] — [gerekçe]"""
+    return prompt
 
-### 10) İLK YARI ÖZEL SKORLAR
-Bu maçta özellikle olası İY yüksek skorları: 2-1, 1-2, 2-2, 2-0, 0-2, 3-1, 1-3 gibi.
-Her biri için: [skor] (%[olasılık]) — [bu maça özgü kısa gerekçe]
-En az 5 İY skoru ver.
 
-### 11) MAÇ SONU ÖZEL SKORLAR
-Bu maçta özellikle olası yüksek/ilginç MS skorları: 2-1, 1-2, 2-2, 3-2, 2-3, 3-1, 1-3, 3-0, 0-3 gibi.
-Her biri için: [skor] (%[olasılık]) — [bu maça özgü kısa gerekçe]
-En az 6 MS skoru ver. SADECE yüksek gollü veya ilginç skorlara odaklan.
-"""
-
-def groq_call(prompt, retries=3):
-    """Groq API çağrısı — 429 rate limit için otomatik retry."""
+def groq_call(prompt, retries=4):
+    """Groq API — rate limit için akıllı retry ve Retry-After header desteği."""
+    import json as _json
     for attempt in range(retries):
         try:
             r = requests.post(
@@ -674,30 +629,43 @@ def groq_call(prompt, retries=3):
                 headers={"Authorization":f"Bearer {GROQ_KEY}","Content-Type":"application/json"},
                 json={"model":groq_model,
                       "messages":[{"role":"user","content":prompt}],
-                      "temperature":0.15,"max_tokens":3500},
+                      "temperature":0.2,
+                      "max_tokens":2000},   # 3500'den 2000'e düşürdük
                 timeout=120)
+
             if r.status_code == 429:
-                wait = 30 * (attempt + 1)   # 30sn, 60sn, 90sn
-                st.warning(f"⏳ Groq rate limit — {wait}sn bekleniyor... (deneme {attempt+1}/{retries})")
-                time.sleep(wait)
+                # Groq Retry-After header'ını oku
+                retry_after = r.headers.get("retry-after") or r.headers.get("Retry-After")
+                try:
+                    wait = int(float(retry_after)) + 2 if retry_after else 20 + attempt * 15
+                except:
+                    wait = 20 + attempt * 15
+                wait = min(wait, 60)  # max 60sn bekle
+                ph = st.empty()
+                for remaining in range(wait, 0, -1):
+                    ph.warning(f"⏳ Rate limit — {remaining}sn bekleniyor... (deneme {attempt+1}/{retries})")
+                    time.sleep(1)
+                ph.empty()
                 continue
+
             if r.status_code == 413:
-                # Prompt çok uzun — kısalt ve tekrar dene
-                prompt = prompt[:int(len(prompt)*0.7)]
+                prompt = prompt[:int(len(prompt)*0.75)]
                 continue
+
             r.raise_for_status()
             return r.json()["choices"][0]["message"]["content"]
+
         except requests.exceptions.HTTPError as e:
             if attempt < retries - 1:
-                time.sleep(20)
+                time.sleep(15)
                 continue
             return f"❌ Groq Hatası: {e}"
         except Exception as e:
             if attempt < retries - 1:
-                time.sleep(10)
+                time.sleep(8)
                 continue
             return f"❌ Groq Hatası: {e}"
-    return "❌ Groq: Maksimum deneme sayısına ulaşıldı. Birkaç dakika bekleyip tekrar deneyin."
+    return "❌ Groq rate limit aşıldı. 2-3 dakika bekleyip tekrar dene."
 
 # ══════════════════════════════════════════════════════════════════
 # ANALİZ PARSE
