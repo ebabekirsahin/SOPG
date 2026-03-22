@@ -286,6 +286,91 @@ html,body,[class*="css"]{font-family:'Inter',sans-serif}
 .notable-pct{font-size:.8rem;font-weight:700;color:#f5a623;font-family:'JetBrains Mono',monospace}
 .notable-cnt{font-size:.6rem;color:#4a6880;margin-left:4px}
 
+/* ── CANLI MAÇ MODÜLÜ ───────────────────────────────── */
+.live-header{
+  background:linear-gradient(90deg,#0d1829,#120808);
+  border:1px solid #b91c1c;border-radius:12px;
+  padding:.9rem 1.4rem;margin-bottom:.8rem;
+  display:flex;align-items:center;gap:12px
+}
+.live-dot{width:9px;height:9px;border-radius:50%;background:#f87171;
+  box-shadow:0 0 8px #f87171;animation:pulse 1.2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.live-badge{font-size:.58rem;font-weight:800;letter-spacing:.12em;color:#f87171;
+  text-transform:uppercase;background:#1a0808;border:1px solid #b91c1c;
+  border-radius:4px;padding:2px 8px}
+.live-title{font-size:.82rem;font-weight:700;color:#d0dce8;flex:1}
+.live-minute{font-size:1.1rem;font-weight:800;color:#f5a623;
+  font-family:'JetBrains Mono',monospace}
+
+/* Canlı skor kutusu */
+.live-score-wrap{
+  background:#09101e;border:1px solid #1c2e44;border-radius:12px;
+  overflow:hidden;margin-bottom:.7rem
+}
+.live-score-row{
+  display:grid;grid-template-columns:1fr auto 1fr;
+  align-items:center;padding:1rem 1.4rem;gap:8px
+}
+.ls-team{text-align:center}
+.ls-team .lst-name{font-size:.9rem;font-weight:700}
+.ls-team .lst-name.home{color:#4c9eff}
+.ls-team .lst-name.away{color:#ff7070}
+.ls-team .lst-events{font-size:.62rem;color:#4a6880;margin-top:3px;min-height:14px}
+.ls-score{text-align:center;background:#111f35;border-radius:8px;padding:6px 16px}
+.ls-score .lss-main{font-size:1.8rem;font-weight:800;color:#d0dce8;
+  font-family:'JetBrains Mono',monospace;letter-spacing:4px}
+.ls-score .lss-ht{font-size:.62rem;color:#4a6880;margin-top:2px}
+
+/* İstatistik bar */
+.stat-bar-row{display:grid;grid-template-columns:48px 1fr 1fr 1fr 48px;
+  gap:4px;align-items:center;padding:3px 1.4rem;border-bottom:1px solid #0d1423}
+.stat-bar-row:last-child{border:none}
+.sbr-val{font-size:.72rem;font-weight:700;font-family:'JetBrains Mono',monospace}
+.sbr-val.home{color:#4c9eff;text-align:right}
+.sbr-val.away{color:#ff7070;text-align:left}
+.sbr-label{font-size:.58rem;color:#4a6880;text-align:center;letter-spacing:.04em}
+.sbr-bars{display:flex;gap:2px;align-items:center;height:6px}
+.sbr-bar-h{height:100%;border-radius:2px 0 0 2px;background:#4c9eff;opacity:.7}
+.sbr-bar-a{height:100%;border-radius:0 2px 2px 0;background:#ff7070;opacity:.7}
+
+/* Gol tavsiye kutuları */
+.goal-rec-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;margin:.7rem 0}
+.goal-rec-box{border-radius:8px;padding:10px 8px;text-align:center;cursor:default}
+.grb-label{font-size:.56rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:3px}
+.grb-bet{font-size:.88rem;font-weight:800;font-family:'JetBrains Mono',monospace;margin:2px 0}
+.grb-odd{font-size:.7rem;font-family:'JetBrains Mono',monospace;margin-bottom:2px}
+.grb-why{font-size:.58rem;line-height:1.4}
+.grb-conf{font-size:.58rem;font-weight:700;margin-top:4px;letter-spacing:.06em}
+.goal-rec-box.strong{background:#04180a;border:1px solid #166534}
+.goal-rec-box.strong .grb-label,.goal-rec-box.strong .grb-conf{color:#3ecf7a}
+.goal-rec-box.strong .grb-bet{color:#d0dce8}
+.goal-rec-box.strong .grb-why{color:#4a6880}
+.goal-rec-box.medium{background:#0e0a00;border:1px solid #b45309}
+.goal-rec-box.medium .grb-label,.goal-rec-box.medium .grb-conf{color:#f5a623}
+.goal-rec-box.medium .grb-bet{color:#d0dce8}
+.goal-rec-box.medium .grb-why{color:#4a6880}
+.goal-rec-box.risky{background:#060f20;border:1px solid #1d4ed8}
+.goal-rec-box.risky .grb-label,.goal-rec-box.risky .grb-conf{color:#4c9eff}
+.goal-rec-box.risky .grb-bet{color:#d0dce8}
+.goal-rec-box.risky .grb-why{color:#4a6880}
+.goal-rec-box.wait{background:#111f35;border:1px solid #1c2e44}
+.goal-rec-box.wait .grb-label{color:#4a6880}
+.goal-rec-box.wait .grb-bet{color:#4a6880}
+.goal-rec-box.wait .grb-why{color:#2a3a4a}
+
+/* Momentum bar */
+.momentum-wrap{padding:.7rem 1.4rem;border-top:1px solid #1c2e44}
+.mom-bar-track{height:8px;border-radius:4px;background:#1c2e44;overflow:hidden;margin:4px 0;position:relative}
+.mom-bar-fill{height:100%;border-radius:4px;transition:width .5s}
+.mom-labels{display:flex;justify-content:space-between;font-size:.6rem;color:#4a6880;margin-top:2px}
+
+/* Canlı maç refresh */
+.live-refresh-row{display:flex;align-items:center;gap:8px;
+  font-size:.62rem;color:#4a6880;padding:.5rem 1.4rem;
+  border-top:1px solid #1c2e44}
+.live-updated{color:#3ecf7a;font-weight:600}
+
 /* Streamlit overrides */
 div[data-testid="stExpander"]{border:1px solid #1c2e44!important;border-radius:12px!important;background:#0d1829!important;overflow:hidden}
 div[data-testid="stExpander"] summary{background:#0d1829!important}
@@ -310,6 +395,14 @@ st.markdown("""
 with st.sidebar:
     st.markdown("## ⚙️ Filtreler")
     st.success("✅ API key'ler hazır")
+
+    # ── MOD SEÇİMİ ──
+    app_mode = st.radio(
+        "Mod",
+        ["📅 Maç Analizi", "🔴 Canlı Maçlar"],
+        horizontal=True,
+        help="Canlı modda oynanan maçları gerçek zamanlı analiz et"
+    )
 
     # ── Ücretsiz planda çalışan ligler (football-data.org) ──
     # 2. ligler ücretli plan gerektirir (49€/ay) — sadece 1. ligler ücretsiz
@@ -459,6 +552,323 @@ def api_standings(code):
 
 def api_scorers(code):
     return fd_get(f"/competitions/{code}/scorers", {"limit": 20}).get("scorers", [])
+
+# ── CANLI MAÇ API FONKSİYONLARI ──────────────────────────────────
+
+def api_live_matches(code=None):
+    """
+    Şu an oynanan canlı maçları çek.
+    football-data.org /v4/matches?status=IN_PLAY,PAUSED
+    """
+    params = {"status": "IN_PLAY,PAUSED"}
+    if code:
+        return fd_get(f"/competitions/{code}/matches", params).get("matches", [])
+    else:
+        return fd_get("/matches", params).get("matches", [])
+
+def api_live_match_detail(match_id):
+    """Tek maçın detayını çek (skor, dakika, istatistik)."""
+    return fd_get(f"/matches/{match_id}")
+
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_sofascore_live_stats(match_id_ss):
+    """
+    SofaScore'dan canlı maç istatistiklerini çek.
+    match_id_ss: SofaScore event ID
+    """
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+                          "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+            "Accept": "application/json",
+            "Referer": "https://www.sofascore.com/",
+        }
+        r = requests.get(
+            f"https://api.sofascore.com/api/v1/event/{match_id_ss}/statistics",
+            headers=headers, timeout=10
+        )
+        if r.status_code == 200:
+            return r.json()
+        return None
+    except:
+        return None
+
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_sofascore_live_event(h_name, a_name):
+    """
+    SofaScore'dan canlı maçı bul ve istatistikleri getir.
+    """
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+                          "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+            "Accept": "application/json",
+            "Referer": "https://www.sofascore.com/",
+        }
+        from datetime import date as _date
+        today = _date.today().strftime("%Y-%m-%d")
+        r = requests.get(
+            f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{today}",
+            headers=headers, timeout=10
+        )
+        if r.status_code != 200:
+            return None, None
+
+        events = r.json().get("events", [])
+        # Canlı maç bul
+        for ev in events:
+            status = ev.get("status", {}).get("type", "")
+            if status not in ("inprogress", "halftime"):
+                continue
+            gh = ev.get("homeTeam", {}).get("name", "")
+            ga = ev.get("awayTeam", {}).get("name", "")
+            if fuzzy_match_team(gh, h_name) and fuzzy_match_team(ga, a_name):
+                ev_id = ev.get("id")
+                # İstatistikleri çek
+                r2 = requests.get(
+                    f"https://api.sofascore.com/api/v1/event/{ev_id}/statistics",
+                    headers=headers, timeout=10
+                )
+                stats_raw = r2.json() if r2.status_code == 200 else {}
+                return ev, stats_raw
+
+        return None, None
+    except:
+        return None, None
+
+def parse_live_stats(stats_raw):
+    """
+    SofaScore istatistik verisini işle.
+    Döndürür: dict with shots, possession, dangerous_attacks, xg, corners, cards vb.
+    """
+    result = {
+        "possession_h": 50, "possession_a": 50,
+        "shots_h": 0, "shots_a": 0,
+        "shots_on_h": 0, "shots_on_a": 0,
+        "dangerous_h": 0, "dangerous_a": 0,
+        "corners_h": 0, "corners_a": 0,
+        "fouls_h": 0, "fouls_a": 0,
+        "yellow_h": 0, "yellow_a": 0,
+        "red_h": 0, "red_a": 0,
+        "xg_h": 0.0, "xg_a": 0.0,
+        "attacks_h": 0, "attacks_a": 0,
+    }
+    if not stats_raw:
+        return result
+
+    stat_map = {
+        "Ball possession": ("possession_h", "possession_a"),
+        "Total shots": ("shots_h", "shots_a"),
+        "Shots on target": ("shots_on_h", "shots_on_a"),
+        "Dangerous attacks": ("dangerous_h", "dangerous_a"),
+        "Corner kicks": ("corners_h", "corners_a"),
+        "Fouls": ("fouls_h", "fouls_a"),
+        "Yellow cards": ("yellow_h", "yellow_a"),
+        "Red cards": ("red_h", "red_a"),
+        "Expected goals": ("xg_h", "xg_a"),
+        "Attacks": ("attacks_h", "attacks_a"),
+        "Total Shots": ("shots_h", "shots_a"),
+        "Shots On Target": ("shots_on_h", "shots_on_a"),
+    }
+
+    periods = stats_raw.get("statistics", [])
+    # Son period veya "ALL" period'u al
+    stat_list = []
+    for p in periods:
+        if p.get("period") in ("ALL", "2ND", "1ST"):
+            stat_list = p.get("groups", [])
+            if p.get("period") == "ALL":
+                break
+
+    for group in stat_list:
+        for item in group.get("statisticsItems", []):
+            name = item.get("name", "")
+            if name in stat_map:
+                hk, ak = stat_map[name]
+                try:
+                    hv = item.get("home", "0")
+                    av = item.get("away", "0")
+                    # Yüzde işareti temizle
+                    hv = float(str(hv).replace("%","").strip() or 0)
+                    av = float(str(av).replace("%","").strip() or 0)
+                    result[hk] = hv
+                    result[ak] = av
+                except:
+                    pass
+    return result
+
+def calc_live_goal_probability(live_stats, minute, h_score, a_score, hf, af):
+    """
+    Canlı maç verisiyle kalan süre için gol olasılıklarını hesapla.
+    
+    Yöntem:
+    - Dakika bazlı gol hızı (şimdiye kadar atılan goller / geçen süre)
+    - xG bazlı projeksiyon
+    - Tehlikeli atak yoğunluğu düzeltmesi
+    - Kalan süre: 90 - minute (+ stopaj tahmini)
+    
+    Döndürür: dict with various over/under probabilities
+    """
+    fv = lambda d,k,dv=0: d.get(k,dv) if d else dv
+
+    total_goals = h_score + a_score
+    elapsed     = max(1, minute)
+    remaining   = max(0, 92 - elapsed)  # +2 stopaj tahmini
+    rem_frac    = remaining / 90.0
+
+    # ── Mevcut gol hızı ──────────────────────────────────────────
+    goal_rate_elapsed = total_goals / elapsed * 90  # gol/90dk normalize
+
+    # ── xG bazlı projeksiyon ─────────────────────────────────────
+    live_xg_h = live_stats.get("xg_h", 0) or 0
+    live_xg_a = live_stats.get("xg_a", 0) or 0
+    live_xg_total = live_xg_h + live_xg_a
+
+    # Form'dan beklenen gol hızı
+    form_xg_h = fv(hf, "avg_gf", 1.3)
+    form_xg_a = fv(af, "avg_gf", 1.1)
+    form_rate  = form_xg_h + form_xg_a  # gol/90dk
+
+    # xG varsa ağırlıklı, yoksa sadece form
+    if live_xg_total > 0.1:
+        xg_rate = (live_xg_total / elapsed * 90) * 0.6 + form_rate * 0.4
+    else:
+        xg_rate = goal_rate_elapsed * 0.5 + form_rate * 0.5
+
+    # ── Tehlikeli atak düzeltmesi ─────────────────────────────────
+    dan_h = live_stats.get("dangerous_h", 0) or 0
+    dan_a = live_stats.get("dangerous_a", 0) or 0
+    dan_total = dan_h + dan_a
+    if dan_total > 0 and elapsed > 0:
+        dan_rate = dan_total / elapsed  # atak/dk
+        # Yüksek atak yoğunluğu → oran artışı
+        dan_multiplier = min(1.4, 1.0 + (dan_rate - 0.3) * 0.5) if dan_rate > 0.3 else 1.0
+    else:
+        dan_multiplier = 1.0
+
+    # ── Kalan süre için beklenen gol ─────────────────────────────
+    expected_remaining = xg_rate * rem_frac * dan_multiplier
+    expected_remaining = max(0.05, expected_remaining)
+
+    # ── Poisson ile olasılık hesapla ─────────────────────────────
+    def poi_prob(lam, k):
+        import math
+        lam = max(0.01, lam)
+        return math.exp(-lam) * (lam**k) / math.factorial(k)
+
+    # Kalan sürede 0,1,2,3+ gol olasılıkları
+    p_0 = poi_prob(expected_remaining, 0)
+    p_1 = poi_prob(expected_remaining, 1)
+    p_2 = poi_prob(expected_remaining, 2)
+    p_3p = max(0, 1 - p_0 - p_1 - p_2)
+
+    # Toplam maç gol hedefleri için — şimdiki + kalan
+    # 0.5 ÜST (maç sonunda en az 1 gol daha)
+    p_next_goal  = round((1 - p_0) * 100, 1)
+    # 2 dk içinde gol ihtimali (yoğunluk bazlı)
+    p_2min_goal  = round((1 - poi_prob(xg_rate/45 * dan_multiplier, 0)) * 100, 1)
+    p_2min_goal  = min(p_2min_goal, 35)  # max %35 cap
+
+    # Mevcut toplam gol sayısına göre pazar olasılıkları
+    cur = total_goals
+    thresholds = [1.5, 2.5, 3.5, 4.5]
+    market_probs = {}
+    for thr in thresholds:
+        needed = thr - cur  # bu kadar daha gol lazım
+        if needed <= 0:
+            market_probs[f"o{int(thr*10)}"] = 99.0
+            market_probs[f"u{int(thr*10)}"] = 1.0
+        else:
+            # Poisson: kalan sürede en az `needed` gol
+            p_under = sum(poi_prob(expected_remaining, k) for k in range(int(needed)))
+            p_over  = round((1 - p_under) * 100, 1)
+            market_probs[f"o{int(thr*10)}"] = p_over
+            market_probs[f"u{int(thr*10)}"] = round(p_under * 100, 1)
+
+    # Her iki takım gol atar mı (KG VAR) — kalan sürede
+    kgv_h_score = h_score > 0
+    kgv_a_score = a_score > 0
+    exp_h = (live_xg_h if live_xg_h > 0.05 else form_xg_h * rem_frac) * dan_multiplier
+    exp_a = (live_xg_a if live_xg_a > 0.05 else form_xg_a * rem_frac) * dan_multiplier
+
+    # KG VAR: her iki takım zaten gol atmışsa garantili, değilse olasılık
+    if kgv_h_score and kgv_a_score:
+        p_kg_var = 99.0
+    elif kgv_h_score:
+        p_kg_var = round((1 - poi_prob(max(0.05, exp_a), 0)) * 100, 1)
+    elif kgv_a_score:
+        p_kg_var = round((1 - poi_prob(max(0.05, exp_h), 0)) * 100, 1)
+    else:
+        p_h_scores = 1 - poi_prob(max(0.05, exp_h), 0)
+        p_a_scores = 1 - poi_prob(max(0.05, exp_a), 0)
+        p_kg_var   = round(p_h_scores * p_a_scores * 100, 1)
+
+    return {
+        "expected_remaining": round(expected_remaining, 2),
+        "xg_rate_per90":      round(xg_rate, 2),
+        "p_next_goal":        p_next_goal,
+        "p_2min_goal":        p_2min_goal,
+        "p_kg_var":           p_kg_var,
+        "remaining_min":      remaining,
+        **market_probs,
+    }
+
+def build_live_prompt(h, a, minute, h_score, a_score, ht_h, ht_a,
+                      live_stats, lp, hf, af, h2h):
+    """
+    Canlı maç Groq prompt'u — gol bahsi odaklı.
+    """
+    fv = lambda d,k,dv=0: d.get(k,dv) if d else dv
+
+    stat_lines = f"""
+CANLI İSTATİSTİKLER (dk {minute}):
+  Skor: {h} {h_score} – {a_score} {a} (İY: {ht_h}-{ht_a})
+  Top: %{live_stats.get('possession_h',50)} – %{live_stats.get('possession_a',50)}
+  Şut: {live_stats.get('shots_h',0)} – {live_stats.get('shots_a',0)} (İsabetli: {live_stats.get('shots_on_h',0)}-{live_stats.get('shots_on_a',0)})
+  Tehlikeli Atak: {live_stats.get('dangerous_h',0)} – {live_stats.get('dangerous_a',0)}
+  Korner: {live_stats.get('corners_h',0)} – {live_stats.get('corners_a',0)}
+  Sarı Kart: {live_stats.get('yellow_h',0)} – {live_stats.get('yellow_a',0)}
+  xG: {live_stats.get('xg_h',0):.2f} – {live_stats.get('xg_a',0):.2f}"""
+
+    prob_lines = f"""
+KALAN SÜRE OLASILILKLARI ({lp['remaining_min']} dk kaldı):
+  Beklenen ek gol: {lp['expected_remaining']}
+  Sonraki gol ihtimali: %{lp['p_next_goal']}
+  KG VAR ihtimali: %{lp['p_kg_var']}
+  1.5 Üst: %{lp.get('o15',0)} | 2.5 Üst: %{lp.get('o25',0)} | 3.5 Üst: %{lp.get('o35',0)}
+  2.5 Alt: %{lp.get('u25',0)} | 3.5 Alt: %{lp.get('u35',0)}"""
+
+    form_lines = f"""
+ÖNCEKİ FORM (tarihsel):
+  {h}: {fv(hf,'form_str','?')} | Ort gol: {fv(hf,'avg_gf',0)} att / {fv(hf,'avg_gc',0)} yedi | 2.5 Üst: {fv(hf,'o25',0)}/{fv(hf,'n',1)} maç
+  {a}: {fv(af,'form_str','?')} | Ort gol: {fv(af,'avg_gf',0)} att / {fv(af,'avg_gc',0)} yedi | 2.5 Üst: {fv(af,'o25',0)}/{fv(af,'n',1)} maç
+  H2H: Ort gol {h2h.get('avg_goals',0)}/maç | 2.5 Üst: %{h2h.get('o25_pct',0)} | KG VAR: %{h2h.get('btts_pct',0)}"""
+
+    return f"""Sen bir canlı bahis uzmanısın. Türkçe yaz. Sadece bu maça özgü, veri bazlı yorum yap.
+
+MAÇ: {h} vs {a} — DAKİKA: {minute}'
+{stat_lines}
+{prob_lines}
+{form_lines}
+
+AYNEN bu formatta yaz:
+
+### DURUM ANALİZİ
+[Mevcut skoru, istatistik üstünlüğünü ve baskı durumunu 2 cümleyle özetle]
+
+### GOL TAHMİNİ
+Beklenen ek gol: {lp['expected_remaining']} | Sonraki gol %{lp['p_next_goal']}
+[Hangi takımın gol atacağı daha olası ve neden — şut/atak verisiyle gerekçele]
+
+### GOL BAHİSLERİ TAVSİYELERİ
+GOL_BAHSI_1: [pazar adı] — [gerekçe kısa] — GÜVENİLİRLİK: [YÜKSEK/ORTA/DÜŞÜK]
+GOL_BAHSI_2: [pazar adı] — [gerekçe kısa] — GÜVENİLİRLİK: [YÜKSEK/ORTA/DÜŞÜK]
+GOL_BAHSI_3: [pazar adı] — [gerekçe kısa] — GÜVENİLİRLİK: [YÜKSEK/ORTA/DÜŞÜK]
+
+Pazar seçenekleri: "2.5 ÜST", "2.5 ALT", "3.5 ÜST", "KG VAR", "KG YOK", "Sonraki gol EV", "Sonraki gol DEP", "Gol YOK (0.5 Alt)", "Her iki yarı gol"
+
+### BEKLE SİNYALİ
+[Bahis açılmamalı mı? Hangi durumda beklemek daha akıllıca? 1 cümle]"""
 
 # ══════════════════════════════════════════════════════════════════
 # VERİ İŞLEME
@@ -2244,9 +2654,199 @@ def parse_analysis(text):
 
     return secs, scenarios, preds, iy_special, ms_special
 
-# ══════════════════════════════════════════════════════════════════
-# VS UI — Ana render fonksiyonu
-# ══════════════════════════════════════════════════════════════════
+def render_live_match(m, live_stats, lp, analysis_text, hf, af, h2h):
+    """Canlı maç panelini render et."""
+    import re as _re
+
+    h      = m["homeTeam"]["name"]
+    a      = m["awayTeam"]["name"]
+    h_sc   = m.get("score",{}).get("fullTime",{}).get("home") or 0
+    a_sc   = m.get("score",{}).get("fullTime",{}).get("away") or 0
+    ht_h   = m.get("score",{}).get("halfTime",{}).get("home") or 0
+    ht_a   = m.get("score",{}).get("halfTime",{}).get("away") or 0
+    minute = m.get("minute", m.get("currentPeriodStartTime", 0)) or "?"
+    status = m.get("status","IN_PLAY")
+
+    # ── BAŞLIK ───────────────────────────────────────────────────
+    st.markdown(
+        f'<div class="live-header">'
+        f'<div class="live-dot"></div>'
+        f'<span class="live-badge">CANLI</span>'
+        f'<span class="live-title">{h} <span style="color:#4a6880">vs</span> {a}</span>'
+        f'<span class="live-minute">{minute}\'</span>'
+        f'</div>', unsafe_allow_html=True
+    )
+
+    # ── SKOR KARTI ───────────────────────────────────────────────
+    events_h = ""
+    events_a = ""
+    for ev in m.get("goals", []):
+        t = ev.get("team",{}).get("id")
+        sc = ev.get("scorer",{}).get("name","?").split()[-1]
+        mi = ev.get("minute","?")
+        if t == m["homeTeam"]["id"]: events_h += f"⚽ {sc} {mi}' "
+        else: events_a += f"⚽ {sc} {mi}' "
+
+    st.markdown(f"""
+<div class="live-score-wrap">
+  <div class="live-score-row">
+    <div class="ls-team">
+      <div class="lst-name home">{h}</div>
+      <div class="lst-events">{events_h or '–'}</div>
+    </div>
+    <div class="ls-score">
+      <div class="lss-main">{h_sc} – {a_sc}</div>
+      <div class="lss-ht">İY: {ht_h}–{ht_a}</div>
+    </div>
+    <div class="ls-team">
+      <div class="lst-name away">{a}</div>
+      <div class="lst-events">{events_a or '–'}</div>
+    </div>
+  </div>
+""", unsafe_allow_html=True)
+
+    # ── İSTATİSTİK BARLARI ───────────────────────────────────────
+    stats_display = [
+        ("Top Kontrolü", f"%{int(live_stats['possession_h'])}", f"%{int(live_stats['possession_a'])}",
+         live_stats['possession_h'], live_stats['possession_a']),
+        ("Şut (İsabetli)", f"{int(live_stats['shots_h'])} ({int(live_stats['shots_on_h'])})",
+         f"{int(live_stats['shots_on_a'])} ({int(live_stats['shots_a'])})",
+         live_stats['shots_h'], live_stats['shots_a']),
+        ("Tehlikeli Atak", str(int(live_stats['dangerous_h'])), str(int(live_stats['dangerous_a'])),
+         live_stats['dangerous_h'], live_stats['dangerous_a']),
+        ("Korner", str(int(live_stats['corners_h'])), str(int(live_stats['corners_a'])),
+         live_stats['corners_h'], live_stats['corners_a']),
+        ("xG", f"{live_stats['xg_h']:.2f}", f"{live_stats['xg_a']:.2f}",
+         live_stats['xg_h']*10, live_stats['xg_a']*10),
+        ("Sarı Kart", str(int(live_stats['yellow_h'])), str(int(live_stats['yellow_a'])),
+         live_stats['yellow_h'], live_stats['yellow_a']),
+    ]
+
+    stat_html = '<div style="padding:.6rem 0">'
+    for lbl, hv, av, hw, aw in stats_display:
+        total = max(hw + aw, 0.01)
+        h_w   = round(hw / total * 100)
+        a_w   = 100 - h_w
+        stat_html += (
+            f'<div class="stat-bar-row">'
+            f'<div class="sbr-val home">{hv}</div>'
+            f'<div class="sbr-bars" style="justify-content:flex-end">'
+            f'<div class="sbr-bar-h" style="width:{h_w}%;max-width:100%"></div>'
+            f'</div>'
+            f'<div class="sbr-label">{lbl}</div>'
+            f'<div class="sbr-bars">'
+            f'<div class="sbr-bar-a" style="width:{a_w}%;max-width:100%"></div>'
+            f'</div>'
+            f'<div class="sbr-val away">{av}</div>'
+            f'</div>'
+        )
+    stat_html += '</div>'
+    st.markdown(stat_html + '</div>', unsafe_allow_html=True)
+
+    # ── KALAN SÜRE OLASILILKLARI ─────────────────────────────────
+    rem = lp['remaining_min']
+    st.markdown(f"""
+<div style="background:#09101e;border:1px solid #1c2e44;border-radius:10px;padding:.9rem 1.4rem;margin-bottom:.7rem">
+  <div style="font-size:.56rem;font-weight:700;letter-spacing:.13em;text-transform:uppercase;
+  color:#4a6880;margin-bottom:8px;border-bottom:1px solid #1c2e44;padding-bottom:4px">
+  ⏱ Kalan {rem} Dakika — Gol Olasılıkları</div>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:8px">
+    {_prob_box("Sonraki Gol", lp['p_next_goal'])}
+    {_prob_box("KG VAR", lp['p_kg_var'])}
+    {_prob_box("2.5 ÜST", lp.get('o25',0))}
+    {_prob_box("2.5 ALT", lp.get('u25',0))}
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
+    {_prob_box("1.5 ÜST", lp.get('o15',0))}
+    {_prob_box("3.5 ÜST", lp.get('o35',0))}
+    {_prob_box("Bkl.Gol", lp['expected_remaining'], is_xg=True)}
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+    # ── GOL BAHİS TAVSİYELERİ ───────────────────────────────────
+    if analysis_text:
+        recs = _parse_goal_bets(analysis_text)
+        durum = _extract_section(analysis_text, "DURUM")
+        gol_tahmin = _extract_section(analysis_text, "GOL TAHMİNİ")
+        bekle = _extract_section(analysis_text, "BEKLE")
+
+        if durum:
+            st.markdown(f"""
+<div style="background:#0d1829;border:1px solid #1c2e44;border-radius:8px;
+padding:.8rem 1.2rem;margin-bottom:.7rem;font-size:.76rem;color:#7a9ab8;line-height:1.7">
+<span style="font-size:.56rem;font-weight:700;letter-spacing:.13em;text-transform:uppercase;
+color:#4a6880;display:block;margin-bottom:4px">📊 Durum Analizi</span>
+{durum}</div>""", unsafe_allow_html=True)
+
+        if recs:
+            st.markdown('<div style="font-size:.56rem;font-weight:700;letter-spacing:.13em;'
+                       'text-transform:uppercase;color:#4a6880;margin-bottom:6px">🎯 Gol Bahis Tavsiyeleri</div>',
+                       unsafe_allow_html=True)
+            cols = st.columns(len(recs))
+            for i, (rec, col) in enumerate(zip(recs, cols)):
+                conf = rec.get("confidence","ORTA").upper()
+                cls  = "strong" if "YÜKSEK" in conf else ("medium" if "ORTA" in conf else "risky")
+                with col:
+                    st.markdown(f"""
+<div class="goal-rec-box {cls}">
+  <div class="grb-label">{'🔒 BANKO' if 'YÜKSEK' in conf else ('⚡ ORTA' if 'ORTA' in conf else '💎 RİSKLİ')}</div>
+  <div class="grb-bet">{rec.get('market','?')}</div>
+  <div class="grb-why">{rec.get('why','')[:80]}</div>
+  <div class="grb-conf">{conf}</div>
+</div>""", unsafe_allow_html=True)
+
+        if bekle:
+            st.markdown(f"""
+<div style="background:#120e00;border:1px solid #b45309;border-radius:7px;
+padding:.6rem 1rem;margin-top:.5rem;font-size:.72rem;color:#f5a623">
+⏳ <b>Bekle:</b> {bekle}</div>""", unsafe_allow_html=True)
+
+def _prob_box(label, val, is_xg=False):
+    """Küçük olasılık kutusu HTML."""
+    if is_xg:
+        color = "#4c9eff"
+        display = f"{val:.2f}" if isinstance(val, float) else str(val)
+        sub = "beklenen"
+    else:
+        v = float(val)
+        color = "#3ecf7a" if v >= 65 else ("#f5a623" if v >= 40 else "#ff7070")
+        display = f"%{v:.0f}"
+        sub = ""
+    return (f'<div style="background:#111f35;border:1px solid #1c2e44;border-radius:6px;'
+            f'padding:7px 4px;text-align:center">'
+            f'<div style="font-size:.54rem;color:#4a6880;text-transform:uppercase;'
+            f'letter-spacing:.08em;margin-bottom:2px">{label}</div>'
+            f'<div style="font-size:1.1rem;font-weight:800;color:{color};'
+            f'font-family:JetBrains Mono,monospace">{display}</div>'
+            f'{"<div style=font-size:.56rem;color:#4a6880>" + sub + "</div>" if sub else ""}'
+            f'</div>')
+
+def _parse_goal_bets(text):
+    """Groq çıktısından GOL_BAHSI satırlarını parse et."""
+    import re as _re
+    recs = []
+    for line in text.splitlines():
+        line = line.strip()
+        m = _re.match(r'GOL_BAHSI_\d+\s*:\s*(.+?)\s*—\s*(.+?)\s*—\s*GÜVENİLİRLİK\s*:\s*(\w+)', line, _re.I)
+        if m:
+            recs.append({"market": m.group(1).strip(), "why": m.group(2).strip(),
+                         "confidence": m.group(3).strip()})
+    return recs[:3]
+
+def _extract_section(text, keyword):
+    """Groq çıktısından bir section içeriğini çek."""
+    import re as _re
+    m = _re.search(rf'###\s*{keyword}.*?\n(.*?)(?=###|\Z)', text, _re.S | _re.I)
+    if m:
+        content = m.group(1).strip()
+        # GOL_BAHSI satırlarını çıkar
+        content = _re.sub(r'GOL_BAHSI_\d+.*', '', content).strip()
+        return content[:300]
+    return ""
+
+
+# ── VS UI ── (mevcut render_vs_ui burada)
 
 def render_vs_ui(match, hf, af, h2h, hxg, axg, h_htxg, a_htxg,
                  stats, top_ms, top_ht, h_stand, a_stand, h_sc, a_sc,
@@ -2937,6 +3537,148 @@ def render_vs_ui(match, hf, af, h2h, hxg, axg, h_htxg, a_htxg,
 for k in ["matches","mdata","analyses","patterns"]:
     if k not in st.session_state:
         st.session_state[k] = [] if k=="matches" else {}
+
+# Canlı maç state
+for k in ["live_matches","live_analyses","live_stats_cache"]:
+    if k not in st.session_state:
+        st.session_state[k] = {}
+
+# ══════════════════════════════════════════════════════════════════
+# CANLI MAÇ MODU
+# ══════════════════════════════════════════════════════════════════
+if app_mode == "🔴 Canlı Maçlar":
+    st.markdown("""
+<div class="live-header" style="margin-bottom:1rem">
+  <div class="live-dot"></div>
+  <span class="live-badge">CANLI ANALİZ</span>
+  <span class="live-title">Oynanan Maçlar — Gerçek Zamanlı Gol Bahis Rehberi</span>
+</div>""", unsafe_allow_html=True)
+
+    # Kontrol satırı
+    lc1, lc2, lc3 = st.columns([2,2,3])
+    with lc1:
+        live_league = st.selectbox(
+            "Lig",
+            ["Tüm Ligler","PL","PD","BL1","SA","FL1","CL","EL"],
+            key="live_league_sel"
+        )
+    with lc2:
+        live_refresh_btn = st.button("🔄 Canlı Maçları Çek / Yenile", type="primary", use_container_width=True, key="live_refresh")
+    with lc3:
+        live_auto = st.checkbox("⚡ 60sn'de bir otomatik yenile", value=False, key="live_auto_refresh")
+
+    if live_auto:
+        time.sleep(1)  # Streamlit rerun tetikleyici
+
+    st.divider()
+
+    # Canlı maçları çek
+    if live_refresh_btn or live_auto:
+        code_filter = None if live_league == "Tüm Ligler" else live_league
+        with st.spinner("📡 Canlı maçlar çekiliyor..."):
+            live_ms = api_live_matches(code_filter)
+
+        if not live_ms:
+            st.info("🔴 Şu anda oynanan maç bulunamadı. Ligler aktif değil veya API limiti dolmuş olabilir.")
+        else:
+            st.success(f"✅ {len(live_ms)} canlı maç bulundu")
+            # Her maç için temel veri çek
+            for lm in live_ms:
+                lid  = lm["id"]
+                lhn  = lm["homeTeam"]["name"]
+                lan  = lm["awayTeam"]["name"]
+                lhid = lm["homeTeam"]["id"]
+                laid = lm["awayTeam"]["id"]
+                # Form verisi (önce cache'e bak)
+                fk = f"live_form_{lhid}_{laid}"
+                if fk not in st.session_state:
+                    hff = parse_form(api_team_matches(lhid, 8), lhid)
+                    aff = parse_form(api_team_matches(laid, 8), laid)
+                    h2hf= parse_h2h(api_h2h(lid, 6), lhid)
+                    st.session_state[fk] = (hff, aff, h2hf)
+                else:
+                    hff, aff, h2hf = st.session_state[fk]
+                st.session_state["live_matches"][lid] = {
+                    "match": lm, "hf": hff, "af": aff, "h2h": h2hf
+                }
+
+    # Canlı maçları göster
+    if not st.session_state["live_matches"]:
+        st.markdown("""
+<div style="background:#0d1829;border:1px solid #1c2e44;border-radius:10px;
+padding:2rem;text-align:center;color:#4a6880;font-size:.82rem">
+  🔴 Canlı maç görüntülemek için <b style="color:#d0dce8">Canlı Maçları Çek</b> butonuna bas.
+</div>""", unsafe_allow_html=True)
+    else:
+        for lid, ld in st.session_state["live_matches"].items():
+            lm   = ld["match"]
+            lhn  = lm["homeTeam"]["name"]
+            lan  = lm["awayTeam"]["name"]
+            lhsc = lm.get("score",{}).get("fullTime",{}).get("home") or 0
+            lasc = lm.get("score",{}).get("fullTime",{}).get("away") or 0
+            lmin = lm.get("minute","?")
+            done = lid in st.session_state["live_analyses"]
+
+            with st.expander(
+                f"🔴 {lhn} {lhsc}–{lasc} {lan}  ·  {lmin}'  {'✅ Analiz Hazır' if done else ''}",
+                expanded=True
+            ):
+                # SofaScore'dan canlı istatistik çek
+                ss_ev, ss_stats_raw = fetch_sofascore_live_event(lhn, lan)
+                live_stats = parse_live_stats(ss_stats_raw)
+
+                # Canlı olasılık hesapla
+                try:
+                    minute_int = int(str(lmin).replace("'","").strip())
+                except:
+                    minute_int = 45
+
+                ht_h = lm.get("score",{}).get("halfTime",{}).get("home") or 0
+                ht_a = lm.get("score",{}).get("halfTime",{}).get("away") or 0
+
+                lp = calc_live_goal_probability(
+                    live_stats, minute_int, lhsc, lasc, ld["hf"], ld["af"]
+                )
+
+                # Analiz yap
+                if not done:
+                    col_a, col_b = st.columns([3,1])
+                    with col_a:
+                        st.caption(f"xG: {lhn} {live_stats.get('xg_h',0):.2f} – {live_stats.get('xg_a',0):.2f} {lan}  |  "
+                                   f"Tehlikeli Atak: {int(live_stats.get('dangerous_h',0))}–{int(live_stats.get('dangerous_a',0))}  |  "
+                                   f"Bkl.Ek Gol: {lp['expected_remaining']}")
+                    with col_b:
+                        if st.button("🤖 Canlı Analiz", key=f"live_btn_{lid}", type="primary"):
+                            with st.spinner("🦙 Groq analiz ediyor..."):
+                                prompt = build_live_prompt(
+                                    lhn, lan, minute_int, lhsc, lasc, ht_h, ht_a,
+                                    live_stats, lp, ld["hf"], ld["af"], ld["h2h"]
+                                )
+                                analysis = groq_call(prompt)
+                                st.session_state["live_analyses"][lid] = analysis
+                            st.rerun()
+                else:
+                    # Analiz var — tam paneli render et
+                    render_live_match(
+                        lm, live_stats, lp,
+                        st.session_state["live_analyses"][lid],
+                        ld["hf"], ld["af"], ld["h2h"]
+                    )
+                    # Yenile butonu
+                    if st.button("🔄 Analizi Güncelle", key=f"live_upd_{lid}"):
+                        with st.spinner("🦙 Güncelleniyor..."):
+                            prompt = build_live_prompt(
+                                lhn, lan, minute_int, lhsc, lasc, ht_h, ht_a,
+                                live_stats, lp, ld["hf"], ld["af"], ld["h2h"]
+                            )
+                            st.session_state["live_analyses"][lid] = groq_call(prompt)
+                        st.rerun()
+
+    if live_auto:
+        time.sleep(58)
+        st.rerun()
+
+    st.stop()  # Canlı modda normal maç akışını durdur
 
 # ══════════════════════════════════════════════════════════════════
 # KONTROLLER
