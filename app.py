@@ -17,20 +17,15 @@ def _safe_minute(val, default=45):
 
 def calc_live_minute(m):
     """
-    football-data.org /v4/matches nesnesinden gerçek oyun dakikasını hesapla.
+    football-data.org maç nesnesinden gerçek oyun dakikasını hesapla.
+    API doğrudan 'minute' vermez — utcDate + now + status'tan türetilir.
 
-    football-data.org minute alanı VERMEZ.
-    Bunun yerine:
-      - status IN_PLAY / PAUSED
-      - lastUpdated  → maçın en son güncellendiği zaman (UTC ISO string)
-      - utcDate      → maç başlangıç zamanı
-
-    1. PAUSED (devre arası) → 45 göster
-    2. IN_PLAY:
-       a. lastUpdated varsa: şimdiki UTC - maç başlangıcı = geçen süre
-          45'ten fazlaysa → 45+geçen-45 (2Y hesabı)
-       b. utcDate'den basit hesap
-    3. Sonucu 1-90 arasında sınırla
+    Mantık:
+    - PAUSED (devre arası) → 45
+    - IN_PLAY, elapsed <= 45  → 1. yarı, elapsed = dakika
+    - IN_PLAY, elapsed 45-60 → devre arası henüz bitmedi → 45
+    - IN_PLAY, elapsed > 60  → 2Y: elapsed - 15 (devre arasını çıkar)
+    - Sonuç 1-95 arasında sınırlanır
     """
     import datetime as _dt
 
@@ -38,40 +33,29 @@ def calc_live_minute(m):
     if status == "PAUSED":
         return 45
 
-    utc_str  = m.get("utcDate", "")
-    last_str = m.get("lastUpdated", "")
+    utc_str = m.get("utcDate", "")
+    if not utc_str:
+        return 45
+
+    try:
+        # utcDate format: "2025-03-22T20:00:00Z"
+        start = _dt.datetime.strptime(utc_str[:19].replace("T", " "), "%Y-%m-%d %H:%M:%S")
+    except:
+        return 45
 
     now = _dt.datetime.utcnow()
+    elapsed = max(0, int((now - start).total_seconds() / 60))
 
-    # Maç başlangıcını parse et
-    start = None
-    for s in [utc_str, last_str]:
-        if not s:
-            continue
-        try:
-            start = _dt.datetime.strptime(s[:19].replace("T"," "), "%Y-%m-%d %H:%M:%S")
-            break
-        except:
-            pass
-
-    if start is None:
-        return 45  # bilinmiyor
-
-    # Geçen süreyi hesapla
-    elapsed_seconds = max(0, (now - start).total_seconds())
-    elapsed_minutes = int(elapsed_seconds / 60)
-
-    # Devre arası ~15dk → 2Y başlangıcı 60dk'dan itibaren say
-    if elapsed_minutes <= 45:
-        minute = elapsed_minutes
-    elif elapsed_minutes <= 60:
-        minute = 45  # devre arası veya henüz 2Y başlamadı
+    if elapsed <= 45:
+        # 1. yarı
+        return max(1, min(45, elapsed))
+    elif elapsed <= 62:
+        # Devre arası henüz bitmemiş olabilir (45dk + ~17dk devre arası)
+        return 45
     else:
-        # 2Y: geçen süreden devre arasını (15dk) çıkar
-        minute = elapsed_minutes - 15
-
-    # Stopaj süresini hesaba kat (maksimum 95)
-    return max(1, min(95, minute))
+        # 2. yarı: toplam geçen süreden devre arasını (~17dk) çıkar
+        minute = elapsed - 17
+        return max(46, min(95, minute))
 
 
 from datetime import date
@@ -817,105 +801,129 @@ def parse_live_stats(stats_raw):
                     pass
     return result
 
-def calc_live_goal_probability(live_stats, minute, h_score, a_score, hf, af):
+def calc_live_goal_probability(live_stats, minute, h_score, a_score, hf, af, league_code=None):
     """
-    Canlı maç — hem MS hem İY gol olasılıklarını hesapla.
+    Canlı maç gol olasılığı — lig karakteri + dakika + xG + form birleşimi.
 
-    Dakika tespiti:
-      1-45  → birinci yarı devam ediyor
-      45    → devre arası olabilir
-      46-90 → ikinci yarı
-      >90   → uzatma
+    Lig gol ortalamaları (90dk/maç, her iki takım toplam):
+      Serie A: ~2.55  ← düşük, defansif
+      Ligue 1: ~2.60
+      La Liga: ~2.65
+      Premier League: ~2.80
+      Bundesliga: ~3.10  ← yüksek
+      Eredivisie: ~3.10
+      Default: ~2.70
 
-    Her durum için ayrı hesap:
-    - İY bitmediyse: kalan İY süresi + İY 0.5 üst ihtimali
-    - İY bittiyse: sadece 2Y/MS hesapları
+    Dakika hassasiyeti:
+      1-45  → 1Y devam
+      46-90 → 2Y devam
+      PAUSED (45) → devre arası
     """
     import math as _math
 
     fv = lambda d, k, dv=0: d.get(k, dv) if d else dv
 
-    # ── Süre tespiti ─────────────────────────────────────────────
-    elapsed     = max(1, minute)
+    # ── Lig bazlı gol ortalaması ──────────────────────────────────
+    LEAGUE_AVG = {
+        "SA":  2.55,   # Serie A
+        "FL1": 2.60,   # Ligue 1
+        "PD":  2.65,   # La Liga
+        "PPL": 2.65,   # Primeira Liga
+        "PL":  2.80,   # Premier League
+        "ELC": 2.75,   # Championship
+        "BL1": 3.10,   # Bundesliga
+        "DED": 3.10,   # Eredivisie
+        "CL":  2.80,
+        "EL":  2.75,
+        "BSA": 2.50,
+    }
+    league_avg = LEAGUE_AVG.get(league_code, 2.70)
+
+    # ── Süre tespiti ──────────────────────────────────────────────
+    elapsed       = max(1, minute)
     is_first_half = elapsed <= 45
-    is_half_time  = elapsed == 45  # tam 45 → devre arası olabilir
+    ht_remaining  = max(0, 47 - elapsed) if is_first_half else 0
+    ms_remaining  = max(0, 92 - elapsed)
+    rem_frac      = ms_remaining / 90.0
+    ht_rem_frac   = ht_remaining / 45.0
+    total_goals   = h_score + a_score
 
-    if is_first_half:
-        # 1. yarıda kalan süre
-        ht_elapsed   = elapsed
-        ht_remaining = max(0, 47 - elapsed)   # +2 stopaj
-        ms_remaining = max(0, 92 - elapsed)
-    else:
-        ht_elapsed   = 45
-        ht_remaining = 0
-        ms_remaining = max(0, 92 - elapsed)
+    # ── Form bazlı beklenti (normalize lig ortalamasına göre) ─────
+    form_avg_gf_h = fv(hf, "avg_gf", league_avg * 0.5)
+    form_avg_gf_a = fv(af, "avg_gf", league_avg * 0.5)
+    # Düşük skorlu ligde form verisi de düşük olacak — lig ort ile kontrol et
+    form_rate_raw = form_avg_gf_h + form_avg_gf_a
+    # Aşırı sapmaları normalize et: formun lig ortalamasına max %40 sapmasına izin ver
+    form_rate = max(league_avg * 0.6, min(league_avg * 1.4, form_rate_raw))
 
-    rem_frac    = ms_remaining / 90.0
-    ht_rem_frac = ht_remaining / 45.0
-
-    total_goals    = h_score + a_score
-    ht_total_goals = total_goals if is_first_half else (h_score + a_score)  # İY skoru aynı maçta
-
-    # ── xG ve gol hızı ───────────────────────────────────────────
-    live_xg_h = live_stats.get("xg_h", 0) or 0
-    live_xg_a = live_stats.get("xg_a", 0) or 0
-    live_xg_total = live_xg_h + live_xg_a
-
-    form_xg_h   = fv(hf, "avg_gf", 1.3)
-    form_xg_a   = fv(af, "avg_gf", 1.1)
-    form_rate   = form_xg_h + form_xg_a
-
-    # Form'dan İY gol oranı
-    ht_form_h   = fv(hf, "ht_avg_gf", form_xg_h * 0.43)
-    ht_form_a   = fv(af, "ht_avg_gf", form_xg_a * 0.43)
+    ht_form_h = fv(hf, "ht_avg_gf", form_avg_gf_h * 0.42)
+    ht_form_a = fv(af, "ht_avg_gf", form_avg_gf_a * 0.42)
     ht_form_rate = ht_form_h + ht_form_a
 
-    if live_xg_total > 0.1 and elapsed > 5:
-        live_xg_rate_90 = (live_xg_total / elapsed * 90)
-        xg_rate = live_xg_rate_90 * 0.6 + form_rate * 0.4
-    else:
-        goal_rate_elapsed = total_goals / elapsed * 90
-        xg_rate = goal_rate_elapsed * 0.5 + form_rate * 0.5
+    # ── Canlı xG hızı ─────────────────────────────────────────────
+    live_xg_h     = live_stats.get("xg_h", 0) or 0
+    live_xg_a     = live_stats.get("xg_a", 0) or 0
+    live_xg_total = live_xg_h + live_xg_a
 
-    # ── Tehlikeli atak düzeltmesi ─────────────────────────────────
-    dan_h = live_stats.get("dangerous_h", 0) or 0
-    dan_a = live_stats.get("dangerous_a", 0) or 0
-    dan_total = dan_h + dan_a
-    if dan_total > 0 and elapsed > 0:
-        dan_rate = dan_total / elapsed
-        dan_multiplier = min(1.45, 1.0 + max(0, (dan_rate - 0.3)) * 0.5)
+    if live_xg_total > 0.05 and elapsed > 8:
+        live_xg_rate = (live_xg_total / elapsed * 90)
+        # xG'yi lig ortalamasıyla da kıyasla — aşırı yüksek xG'yi kırp
+        live_xg_rate = min(live_xg_rate, league_avg * 1.8)
+        # Ağırlıklı: canlı xG %50 + form %30 + lig ort %20
+        xg_rate = live_xg_rate * 0.50 + form_rate * 0.30 + league_avg * 0.20
+    elif total_goals > 0 and elapsed > 10:
+        goal_rate_live = total_goals / elapsed * 90
+        xg_rate = goal_rate_live * 0.35 + form_rate * 0.40 + league_avg * 0.25
     else:
-        dan_multiplier = 1.0
+        # Maç yeni başladı ya da veri yok — form + lig ağırlıklı
+        xg_rate = form_rate * 0.55 + league_avg * 0.45
 
-    # Şut isabeti oranı — yüksekse tehlike artar
+    # ── Tehlikeli atak + şut isabeti düzeltmesi ───────────────────
+    dan_h      = live_stats.get("dangerous_h", 0) or 0
+    dan_a      = live_stats.get("dangerous_a", 0) or 0
     shots_h    = live_stats.get("shots_h", 0) or 0
     shots_on_h = live_stats.get("shots_on_h", 0) or 0
     shots_a    = live_stats.get("shots_a", 0) or 0
     shots_on_a = live_stats.get("shots_on_a", 0) or 0
-    shot_acc_h = shots_on_h / shots_h if shots_h > 0 else 0.35
-    shot_acc_a = shots_on_a / shots_a if shots_a > 0 else 0.35
-    shot_multiplier = min(1.2, 0.9 + (shot_acc_h + shot_acc_a) / 2 * 0.6)
 
-    combined_multiplier = min(1.5, dan_multiplier * shot_multiplier)
-
-    # ── Kalan süre için beklenen goller ──────────────────────────
-    expected_ms   = max(0.05, xg_rate * rem_frac * combined_multiplier)
-    expected_ht   = max(0.02, ht_form_rate * ht_rem_frac * combined_multiplier) if is_first_half else 0.0
-
-    # Ayrı ev/dep xG projeksiyonu
-    if live_xg_h > 0.05 and elapsed > 5:
-        exp_h_rate = (live_xg_h / elapsed * 90) * 0.6 + form_xg_h * 0.4
-        exp_a_rate = (live_xg_a / elapsed * 90) * 0.6 + form_xg_a * 0.4
+    dan_total = dan_h + dan_a
+    if dan_total > 0 and elapsed > 5:
+        dan_rate = dan_total / elapsed
+        # Lig karakterine göre eşik: düşük gol liginde atak/gol dönüşüm oranı düşük
+        dan_threshold = 0.35 if league_avg < 2.65 else 0.28
+        dan_multiplier = min(1.35, 1.0 + max(0, (dan_rate - dan_threshold)) * 0.4)
     else:
-        exp_h_rate = form_xg_h
-        exp_a_rate = form_xg_a
+        dan_multiplier = 1.0
 
-    exp_h_rem = max(0.02, exp_h_rate * rem_frac * combined_multiplier)
-    exp_a_rem = max(0.02, exp_a_rate * rem_frac * combined_multiplier)
-    exp_h_ht  = max(0.01, fv(hf, "ht_avg_gf", exp_h_rate * 0.43) * ht_rem_frac * combined_multiplier)
-    exp_a_ht  = max(0.01, fv(af, "ht_avg_gf", exp_a_rate * 0.43) * ht_rem_frac * combined_multiplier)
+    # Şut isabeti — yalnızca anlamlı örneklem varsa kullan
+    if shots_h + shots_a >= 4:
+        shot_acc = (shots_on_h + shots_on_a) / (shots_h + shots_a)
+        # Beklenen isabetlilik ~%35; düşük ligde daha düşük (~%30)
+        expected_acc = 0.30 if league_avg < 2.65 else 0.35
+        shot_mult = min(1.15, 0.92 + (shot_acc - expected_acc) * 0.8)
+    else:
+        shot_mult = 1.0
 
-    # ── Poisson yardımcı ─────────────────────────────────────────
+    combined_mult = min(1.45, dan_multiplier * shot_mult)
+
+    # ── Kalan süre için beklenen goller ───────────────────────────
+    expected_ms = max(0.05, xg_rate * rem_frac * combined_mult)
+    expected_ht = max(0.02, ht_form_rate * ht_rem_frac * combined_mult) if is_first_half and ht_remaining > 0 else 0.0
+
+    # Bireysel takım beklentisi
+    if live_xg_h > 0.03 and elapsed > 8:
+        exp_h_rate = (live_xg_h / elapsed * 90) * 0.5 + form_avg_gf_h * 0.3 + league_avg * 0.2 * 0.5
+        exp_a_rate = (live_xg_a / elapsed * 90) * 0.5 + form_avg_gf_a * 0.3 + league_avg * 0.2 * 0.5
+    else:
+        exp_h_rate = form_avg_gf_h * 0.6 + league_avg * 0.4 * 0.5
+        exp_a_rate = form_avg_gf_a * 0.6 + league_avg * 0.4 * 0.5
+
+    exp_h_rem = max(0.02, exp_h_rate * rem_frac * combined_mult)
+    exp_a_rem = max(0.02, exp_a_rate * rem_frac * combined_mult)
+    exp_h_ht  = max(0.01, fv(hf, "ht_avg_gf", exp_h_rate * 0.42) * ht_rem_frac * combined_mult)
+    exp_a_ht  = max(0.01, fv(af, "ht_avg_gf", exp_a_rate * 0.42) * ht_rem_frac * combined_mult)
+
+    # ── Poisson yardımcı ──────────────────────────────────────────
     def poi(lam, k):
         lam = max(0.001, lam)
         return _math.exp(-lam) * (lam ** k) / _math.factorial(k)
@@ -936,12 +944,11 @@ def calc_live_goal_probability(live_stats, minute, h_score, a_score, hf, af):
             market_probs[f"o{int(thr*10)}"] = p_over
             market_probs[f"u{int(thr*10)}"] = round(100 - p_over, 1)
 
-    # ── İY pazar olasılıkları (sadece 1. yarı devam ediyorsa) ─────
+    # ── İY pazar olasılıkları ─────────────────────────────────────
     ht_market = {}
     if is_first_half and ht_remaining > 0:
-        ht_cur = total_goals  # İY'deki mevcut goller
         for thr in [0.5, 1.5, 2.5]:
-            needed = thr - ht_cur
+            needed = thr - total_goals
             if needed <= 0:
                 ht_market[f"ht_o{int(thr*10)}"] = 99.0
                 ht_market[f"ht_u{int(thr*10)}"] = 1.0
@@ -950,7 +957,6 @@ def calc_live_goal_probability(live_stats, minute, h_score, a_score, hf, af):
                 ht_market[f"ht_o{int(thr*10)}"] = p_over
                 ht_market[f"ht_u{int(thr*10)}"] = round(100 - p_over, 1)
 
-        # İY KG VAR
         if h_score > 0 and a_score > 0:
             ht_market["ht_kg_var"] = 99.0
         elif h_score > 0:
@@ -960,13 +966,10 @@ def calc_live_goal_probability(live_stats, minute, h_score, a_score, hf, af):
         else:
             ht_market["ht_kg_var"] = round(p_at_least(exp_h_ht, 1) * p_at_least(exp_a_ht, 1) * 100, 1)
 
-        # İY'de sonraki gol hangi takım
-        p_h_next_ht = round(p_at_least(exp_h_ht, 1) * 100, 1)
-        p_a_next_ht = round(p_at_least(exp_a_ht, 1) * 100, 1)
-        ht_market["ht_next_h"] = p_h_next_ht
-        ht_market["ht_next_a"] = p_a_next_ht
+        ht_market["ht_next_h"] = round(p_at_least(exp_h_ht, 1) * 100, 1)
+        ht_market["ht_next_a"] = round(p_at_least(exp_a_ht, 1) * 100, 1)
 
-    # ── MS KG VAR ────────────────────────────────────────────────
+    # ── MS KG VAR ─────────────────────────────────────────────────
     if h_score > 0 and a_score > 0:
         p_kg_var = 99.0
     elif h_score > 0:
@@ -976,20 +979,11 @@ def calc_live_goal_probability(live_stats, minute, h_score, a_score, hf, af):
     else:
         p_kg_var = round(p_at_least(exp_h_rem, 1) * p_at_least(exp_a_rem, 1) * 100, 1)
 
-    # ── Genel metrikler ───────────────────────────────────────────
-    p_next_goal = round(p_at_least(expected_ms, 1) * 100, 1)
-    p_next_h    = round(p_at_least(exp_h_rem, 1) * 100, 1)
-    p_next_a    = round(p_at_least(exp_a_rem, 1) * 100, 1)
-
-    # Momentum skoru (0-100, ev lehine)
+    # ── Momentum ──────────────────────────────────────────────────
     total_attacks = dan_h + dan_a + shots_h + shots_a
-    if total_attacks > 0:
-        momentum_h = round((dan_h + shots_on_h * 1.5) / max(1, dan_h + dan_a + shots_on_h + shots_on_a) * 100)
-    else:
-        momentum_h = 50
+    momentum_h = round((dan_h + shots_on_h * 1.5) / max(1, dan_h + dan_a + shots_on_h + shots_on_a) * 100) if total_attacks > 0 else 50
 
     return {
-        # Temel
         "elapsed":            elapsed,
         "remaining_min":      ms_remaining,
         "ht_remaining_min":   ht_remaining,
@@ -997,15 +991,13 @@ def calc_live_goal_probability(live_stats, minute, h_score, a_score, hf, af):
         "expected_remaining": round(expected_ms, 2),
         "expected_ht":        round(expected_ht, 2),
         "xg_rate_per90":      round(xg_rate, 2),
-        # MS
-        "p_next_goal":        p_next_goal,
-        "p_next_h":           p_next_h,
-        "p_next_a":           p_next_a,
+        "league_avg":         league_avg,
+        "p_next_goal":        round(p_at_least(expected_ms, 1) * 100, 1),
+        "p_next_h":           round(p_at_least(exp_h_rem, 1) * 100, 1),
+        "p_next_a":           round(p_at_least(exp_a_rem, 1) * 100, 1),
         "p_kg_var":           p_kg_var,
-        # Momentum
         "momentum_h":         momentum_h,
-        "dan_multiplier":     round(combined_multiplier, 2),
-        # Pazar olasılıkları
+        "dan_multiplier":     round(combined_mult, 2),
         **market_probs,
         **ht_market,
     }
@@ -1022,7 +1014,9 @@ def build_live_prompt(h, a, minute, h_score, a_score, ht_h, ht_a,
     ms_rem = lp.get("remaining_min", 0)
 
     # ── Stat bloğu ────────────────────────────────────────────────
+    league_desc = {"SA":"Serie A (düşük gol ligi, ort 2.55/maç)","FL1":"Ligue 1 (düşük gol ligi, ort 2.60/maç)","PD":"La Liga (ort 2.65/maç)","BL1":"Bundesliga (yüksek gol ligi, ort 3.10/maç)","DED":"Eredivisie (yüksek gol ligi, ort 3.10/maç)","PL":"Premier League (ort 2.80/maç)"}.get(live_league if "live_league" in dir() else "", f"Lig ort: {lp.get('league_avg',2.70):.2f} gol/maç")
     stat_block = f"""CANLI İSTATİSTİKLER — Dakika {minute}:
+  LİG KARAKTERİ: {league_desc}
   Skor: {h} {h_score} – {a_score} {a}{"  (1. Yarı)" if is_ht else "  (2. Yarı / İY: " + str(ht_h) + "-" + str(ht_a) + ")"}
   Top Kontrolü: %{live_stats.get('possession_h',50)} EV — %{live_stats.get('possession_a',50)} DEP
   Şut (İsabetli): {int(live_stats.get('shots_h',0))} ({int(live_stats.get('shots_on_h',0))}) EV — {int(live_stats.get('shots_on_a',0))} ({int(live_stats.get('shots_a',0))}) DEP
@@ -3990,7 +3984,7 @@ if app_mode == "🔴 Canlı Maçlar":
             bar.progress((idx) / total, text=f"({idx+1}/{total}) {lhn} – {lan}")
             ss_ev, ss_raw = fetch_sofascore_live_event(lhn, lan)
             lstats = parse_live_stats(ss_raw)
-            lp_    = calc_live_goal_probability(lstats, minute_int, lhsc, lasc, ld["hf"], ld["af"])
+            lp_    = calc_live_goal_probability(lstats, minute_int, lhsc, lasc, ld["hf"], ld["af"], league_code=live_league if live_league != "Tüm Ligler" else None)
             prompt = build_live_prompt(lhn, lan, minute_int, lhsc, lasc, ht_h, ht_a, lstats, lp_, ld["hf"], ld["af"], ld["h2h"])
             st.session_state["live_analyses"][lid] = groq_call(prompt)
             if idx < total - 1:
@@ -4091,7 +4085,7 @@ display:flex;align-items:center;gap:14px">
                 ht_h = lm.get("score",{}).get("halfTime",{}).get("home") or 0
                 ht_a = lm.get("score",{}).get("halfTime",{}).get("away") or 0
 
-                lp = calc_live_goal_probability(live_stats, minute_int, lhsc, lasc, ld["hf"], ld["af"])
+                lp = calc_live_goal_probability(live_stats, minute_int, lhsc, lasc, ld["hf"], ld["af"], league_code=live_league if live_league != "Tüm Ligler" else None)
 
                 if done:
                     atxt = st.session_state["live_analyses"][lid]
