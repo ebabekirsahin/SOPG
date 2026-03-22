@@ -335,8 +335,24 @@ with st.sidebar:
 
     st.divider()
     st.markdown("### 💰 Oran & Pattern Ayarları")
-    st.caption("football-data.co.uk → Kayıt yok · Key yok · Otomatik")
-    auto_odds = st.checkbox("✅ Oranları otomatik çek", value=True)
+    st.markdown("""<div style="background:#0a1628;border:1px solid #1e3a5f;border-left:3px solid #00e5a0;
+border-radius:6px;padding:8px 10px;font-size:.74rem;color:#6b7280;line-height:1.8;margin-bottom:8px">
+<b style="color:#00e5a0">API-Football — ÜCRETSİZ</b><br>
+→ <a href="https://dashboard.api-football.com/register" target="_blank" style="color:#60a5fa">
+dashboard.api-football.com/register</a><br>
+→ E-mail + şifre ile kayıt (onay maili geliyor)<br>
+→ Dashboard → My Access → API Key kopyala<br>
+→ <b style="color:#e2e8f0">100 istek/gün ücretsiz · Kart yok</b><br>
+→ Tüm ligler + gerçek bookmaker oranları
+</div>""", unsafe_allow_html=True)
+    apifootball_key = st.text_input(
+        "API-Football Key",
+        type="password",
+        placeholder="dashboard.api-football.com → API Key",
+        help="Ücretsiz: dashboard.api-football.com/register"
+    )
+    auto_odds = st.checkbox("✅ Oranları otomatik çek", value=True,
+        help="API-Football key varsa gerçek oranlar · Yoksa fdco.uk CSV denenir")
     tolerance = st.slider("Oran Toleransı (±)", 0.10, 0.60, 0.30, 0.05,
                            help="Geçmiş pattern aramasında kabul edilen oran farkı")
     n_seasons = st.slider("Kaç Sezon Analiz Edilsin", 1, 5, 3)
@@ -686,30 +702,159 @@ def fetch_fixtures_with_odds(couk_code):
 
     return {}
 
-def get_match_odds(sel_code, odds_api_key, hn, an, auto_odds):
+
+# ── API-FOOTBALL ODDS ────────────────────────────────────────────
+# Endpoint: GET /odds?fixture={id}&bookmaker=1&bet=1
+# Ücretsiz: 100 istek/gün · dashboard.api-football.com/register
+AF_BASE   = "https://v3.football.api-sports.io"
+
+# football-data.org liga ID → API-Football liga ID
+FD_TO_AF_LEAGUE = {
+    "PL": 39, "ELC": 40, "FAC": 45,
+    "PD": 140, "BL1": 78, "SA": 135,
+    "FL1": 61, "DED": 88, "PPL": 94,
+    "CL": 2, "EL": 3, "ECL": 848,
+    "BSA": 71,
+}
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def af_get(endpoint, params, key):
+    """API-Football'a istek at."""
+    try:
+        r = requests.get(
+            f"{AF_BASE}/{endpoint}",
+            headers={"x-apisports-key": key},
+            params=params, timeout=15
+        )
+        if r.status_code == 200:
+            data = r.json()
+            # Kalan istek sayısını göster
+            rem = data.get("response") and r.headers.get("X-RateLimit-Remaining","?")
+            if debug: st.caption(f"🐛 AF /{endpoint} → {r.status_code} | Kalan: {rem}")
+            return data.get("response", [])
+        if r.status_code == 401:
+            st.warning("⚠️ API-Football key geçersiz")
+        return []
+    except Exception as e:
+        if debug: st.caption(f"🐛 AF error: {e}")
+        return []
+
+def get_af_fixture_id(af_key, league_id, match_date, home_name, away_name):
     """
-    football-data.co.uk'tan otomatik oran çek — KEY YOK.
-    Cache: 30dk (maçlar çekildikten sonra değişmez).
+    API-Football'dan fixture ID bul — fuzzy team name matching ile.
+    """
+    fixtures = af_get("fixtures", {
+        "league": league_id,
+        "date":   match_date,
+        "season": 2025 if int(match_date[:4]) >= 2025 else 2024,
+    }, af_key)
+
+    for f in fixtures:
+        h = f.get("teams",{}).get("home",{}).get("name","")
+        a = f.get("teams",{}).get("away",{}).get("name","")
+        if fuzzy_match_team(h, home_name) and fuzzy_match_team(a, away_name):
+            return f.get("fixture",{}).get("id")
+    return None
+
+def get_af_odds(af_key, fixture_id):
+    """
+    API-Football'dan maç oranlarını çek.
+    Bet ID 1 = Match Winner (1X2), Bet ID 5 = Goals Over/Under
+    """
+    # 1X2 oranları
+    odds_data = af_get("odds", {
+        "fixture":   fixture_id,
+        "bookmaker": 1,  # Bet365
+        "bet":       1,  # Match Winner
+    }, af_key)
+
+    o1 = ox = o2 = None
+    for item in odds_data:
+        for bm in item.get("bookmakers", []):
+            for bet in bm.get("bets", []):
+                if bet.get("id") == 1:  # Match Winner
+                    for v in bet.get("values", []):
+                        if v.get("value") == "Home": o1 = _safe_float(v.get("odd"))
+                        elif v.get("value") == "Draw": ox = _safe_float(v.get("odd"))
+                        elif v.get("value") == "Away": o2 = _safe_float(v.get("odd"))
+
+    if not (o1 and ox and o2):
+        return None
+
+    # Over/Under 2.5
+    ou_data = af_get("odds", {
+        "fixture":   fixture_id,
+        "bookmaker": 1,
+        "bet":       5,  # Goals Over/Under
+    }, af_key)
+
+    o25_ov = o25_un = None
+    for item in ou_data:
+        for bm in item.get("bookmakers", []):
+            for bet in bm.get("bets", []):
+                if bet.get("id") == 5:
+                    for v in bet.get("values", []):
+                        if v.get("value") == "Over 2.5":  o25_ov = _safe_float(v.get("odd"))
+                        elif v.get("value") == "Under 2.5": o25_un = _safe_float(v.get("odd"))
+
+    return {
+        "o1": o1, "ox": ox, "o2": o2,
+        "o25_ov": o25_ov, "o25_un": o25_un,
+        "source": "api-football.com"
+    }
+
+def get_match_odds(sel_code, odds_api_key, hn, an, auto_odds,
+                   match_date=None, af_key=None):
+    """
+    Oran çekme — öncelik sırası:
+    1. API-Football (key varsa) — gerçek bookmaker oranları
+    2. football-data.co.uk CSV — ücretsiz, key yok
     """
     if not auto_odds:
         return None
+
+    # ── 1. API-Football ──────────────────────────────────────────
+    if af_key and af_key.strip():
+        af_league = FD_TO_AF_LEAGUE.get(sel_code)
+        if af_league and match_date:
+            # Önce fixture ID bul
+            cache_fid = f"af_fid_{sel_code}_{match_date}_{hn[:6]}"
+            if cache_fid not in st.session_state:
+                fid = get_af_fixture_id(af_key, af_league, match_date, hn, an)
+                st.session_state[cache_fid] = fid
+            else:
+                fid = st.session_state[cache_fid]
+
+            if debug: st.caption(f"🐛 AF fixture_id={fid} | {hn} vs {an}")
+
+            if fid:
+                cache_odds = f"af_odds_{fid}"
+                if cache_odds not in st.session_state:
+                    result = get_af_odds(af_key, fid)
+                    st.session_state[cache_odds] = result
+                else:
+                    result = st.session_state[cache_odds]
+                if result:
+                    return result
+
+    # ── 2. football-data.co.uk CSV ───────────────────────────────
     couk_code = FD_ORG_TO_COUK.get(sel_code)
-    if not couk_code:
-        return None  # Bu lig fdcouk'ta yok (CL, BSA vb.)
+    if couk_code:
+        fo_key = f"fdcouk_{couk_code}"
+        if fo_key not in st.session_state:
+            fo = fetch_fixtures_with_odds(couk_code)
+            st.session_state[fo_key] = fo
+        else:
+            fo = st.session_state[fo_key]
 
-    fo_key = f"fdcouk_{couk_code}"
-    if fo_key not in st.session_state:
-        fo = fetch_fixtures_with_odds(couk_code)
-        st.session_state[fo_key] = fo
-    else:
-        fo = st.session_state[fo_key]
+        if debug:
+            st.caption(f"🐛 fdcouk [{couk_code}] {len(fo)} maç bulundu")
 
-    if debug:
-        st.caption(f"🐛 fdcouk [{couk_code}] {len(fo)} maç | Aranan: {hn} vs {an}")
-        for k in list(fo.keys())[:4]:
-            st.caption(f"🐛  {k.replace('|||',' vs ')}")
+        result = match_odds_to_fixture(fo, hn, an)
+        if result:
+            return result
 
-    return match_odds_to_fixture(fo, hn, an)
+    return None
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_season_csv(couk_code, season_code):
@@ -2285,7 +2430,12 @@ if fetch_btn:
         # ── Otomatik oran çekme (The Odds API → fdcouk fallback) ──
         matched_odds = None
         if auto_odds:
-            matched_odds = get_match_odds(sel_code, odds_api_key, hn, an, auto_odds)
+            _match_date = m.get("utcDate","")[:10]
+            matched_odds = get_match_odds(
+                sel_code, odds_api_key, hn, an, auto_odds,
+                match_date=_match_date,
+                af_key=apifootball_key
+            )
 
         if matched_odds:
             oa = analyze_odds(
