@@ -747,40 +747,62 @@ def parse_live_stats(stats_raw):
 
 def calc_live_goal_probability(live_stats, minute, h_score, a_score, hf, af):
     """
-    Canlı maç verisiyle kalan süre için gol olasılıklarını hesapla.
-    
-    Yöntem:
-    - Dakika bazlı gol hızı (şimdiye kadar atılan goller / geçen süre)
-    - xG bazlı projeksiyon
-    - Tehlikeli atak yoğunluğu düzeltmesi
-    - Kalan süre: 90 - minute (+ stopaj tahmini)
-    
-    Döndürür: dict with various over/under probabilities
+    Canlı maç — hem MS hem İY gol olasılıklarını hesapla.
+
+    Dakika tespiti:
+      1-45  → birinci yarı devam ediyor
+      45    → devre arası olabilir
+      46-90 → ikinci yarı
+      >90   → uzatma
+
+    Her durum için ayrı hesap:
+    - İY bitmediyse: kalan İY süresi + İY 0.5 üst ihtimali
+    - İY bittiyse: sadece 2Y/MS hesapları
     """
-    fv = lambda d,k,dv=0: d.get(k,dv) if d else dv
+    import math as _math
 
-    total_goals = h_score + a_score
+    fv = lambda d, k, dv=0: d.get(k, dv) if d else dv
+
+    # ── Süre tespiti ─────────────────────────────────────────────
     elapsed     = max(1, minute)
-    remaining   = max(0, 92 - elapsed)  # +2 stopaj tahmini
-    rem_frac    = remaining / 90.0
+    is_first_half = elapsed <= 45
+    is_half_time  = elapsed == 45  # tam 45 → devre arası olabilir
 
-    # ── Mevcut gol hızı ──────────────────────────────────────────
-    goal_rate_elapsed = total_goals / elapsed * 90  # gol/90dk normalize
+    if is_first_half:
+        # 1. yarıda kalan süre
+        ht_elapsed   = elapsed
+        ht_remaining = max(0, 47 - elapsed)   # +2 stopaj
+        ms_remaining = max(0, 92 - elapsed)
+    else:
+        ht_elapsed   = 45
+        ht_remaining = 0
+        ms_remaining = max(0, 92 - elapsed)
 
-    # ── xG bazlı projeksiyon ─────────────────────────────────────
+    rem_frac    = ms_remaining / 90.0
+    ht_rem_frac = ht_remaining / 45.0
+
+    total_goals    = h_score + a_score
+    ht_total_goals = total_goals if is_first_half else (h_score + a_score)  # İY skoru aynı maçta
+
+    # ── xG ve gol hızı ───────────────────────────────────────────
     live_xg_h = live_stats.get("xg_h", 0) or 0
     live_xg_a = live_stats.get("xg_a", 0) or 0
     live_xg_total = live_xg_h + live_xg_a
 
-    # Form'dan beklenen gol hızı
-    form_xg_h = fv(hf, "avg_gf", 1.3)
-    form_xg_a = fv(af, "avg_gf", 1.1)
-    form_rate  = form_xg_h + form_xg_a  # gol/90dk
+    form_xg_h   = fv(hf, "avg_gf", 1.3)
+    form_xg_a   = fv(af, "avg_gf", 1.1)
+    form_rate   = form_xg_h + form_xg_a
 
-    # xG varsa ağırlıklı, yoksa sadece form
-    if live_xg_total > 0.1:
-        xg_rate = (live_xg_total / elapsed * 90) * 0.6 + form_rate * 0.4
+    # Form'dan İY gol oranı
+    ht_form_h   = fv(hf, "ht_avg_gf", form_xg_h * 0.43)
+    ht_form_a   = fv(af, "ht_avg_gf", form_xg_a * 0.43)
+    ht_form_rate = ht_form_h + ht_form_a
+
+    if live_xg_total > 0.1 and elapsed > 5:
+        live_xg_rate_90 = (live_xg_total / elapsed * 90)
+        xg_rate = live_xg_rate_90 * 0.6 + form_rate * 0.4
     else:
+        goal_rate_elapsed = total_goals / elapsed * 90
         xg_rate = goal_rate_elapsed * 0.5 + form_rate * 0.5
 
     # ── Tehlikeli atak düzeltmesi ─────────────────────────────────
@@ -788,135 +810,236 @@ def calc_live_goal_probability(live_stats, minute, h_score, a_score, hf, af):
     dan_a = live_stats.get("dangerous_a", 0) or 0
     dan_total = dan_h + dan_a
     if dan_total > 0 and elapsed > 0:
-        dan_rate = dan_total / elapsed  # atak/dk
-        # Yüksek atak yoğunluğu → oran artışı
-        dan_multiplier = min(1.4, 1.0 + (dan_rate - 0.3) * 0.5) if dan_rate > 0.3 else 1.0
+        dan_rate = dan_total / elapsed
+        dan_multiplier = min(1.45, 1.0 + max(0, (dan_rate - 0.3)) * 0.5)
     else:
         dan_multiplier = 1.0
 
-    # ── Kalan süre için beklenen gol ─────────────────────────────
-    expected_remaining = xg_rate * rem_frac * dan_multiplier
-    expected_remaining = max(0.05, expected_remaining)
+    # Şut isabeti oranı — yüksekse tehlike artar
+    shots_h    = live_stats.get("shots_h", 0) or 0
+    shots_on_h = live_stats.get("shots_on_h", 0) or 0
+    shots_a    = live_stats.get("shots_a", 0) or 0
+    shots_on_a = live_stats.get("shots_on_a", 0) or 0
+    shot_acc_h = shots_on_h / shots_h if shots_h > 0 else 0.35
+    shot_acc_a = shots_on_a / shots_a if shots_a > 0 else 0.35
+    shot_multiplier = min(1.2, 0.9 + (shot_acc_h + shot_acc_a) / 2 * 0.6)
 
-    # ── Poisson ile olasılık hesapla ─────────────────────────────
-    def poi_prob(lam, k):
-        import math
-        lam = max(0.01, lam)
-        return math.exp(-lam) * (lam**k) / math.factorial(k)
+    combined_multiplier = min(1.5, dan_multiplier * shot_multiplier)
 
-    # Kalan sürede 0,1,2,3+ gol olasılıkları
-    p_0 = poi_prob(expected_remaining, 0)
-    p_1 = poi_prob(expected_remaining, 1)
-    p_2 = poi_prob(expected_remaining, 2)
-    p_3p = max(0, 1 - p_0 - p_1 - p_2)
+    # ── Kalan süre için beklenen goller ──────────────────────────
+    expected_ms   = max(0.05, xg_rate * rem_frac * combined_multiplier)
+    expected_ht   = max(0.02, ht_form_rate * ht_rem_frac * combined_multiplier) if is_first_half else 0.0
 
-    # Toplam maç gol hedefleri için — şimdiki + kalan
-    # 0.5 ÜST (maç sonunda en az 1 gol daha)
-    p_next_goal  = round((1 - p_0) * 100, 1)
-    # 2 dk içinde gol ihtimali (yoğunluk bazlı)
-    p_2min_goal  = round((1 - poi_prob(xg_rate/45 * dan_multiplier, 0)) * 100, 1)
-    p_2min_goal  = min(p_2min_goal, 35)  # max %35 cap
+    # Ayrı ev/dep xG projeksiyonu
+    if live_xg_h > 0.05 and elapsed > 5:
+        exp_h_rate = (live_xg_h / elapsed * 90) * 0.6 + form_xg_h * 0.4
+        exp_a_rate = (live_xg_a / elapsed * 90) * 0.6 + form_xg_a * 0.4
+    else:
+        exp_h_rate = form_xg_h
+        exp_a_rate = form_xg_a
 
-    # Mevcut toplam gol sayısına göre pazar olasılıkları
+    exp_h_rem = max(0.02, exp_h_rate * rem_frac * combined_multiplier)
+    exp_a_rem = max(0.02, exp_a_rate * rem_frac * combined_multiplier)
+    exp_h_ht  = max(0.01, fv(hf, "ht_avg_gf", exp_h_rate * 0.43) * ht_rem_frac * combined_multiplier)
+    exp_a_ht  = max(0.01, fv(af, "ht_avg_gf", exp_a_rate * 0.43) * ht_rem_frac * combined_multiplier)
+
+    # ── Poisson yardımcı ─────────────────────────────────────────
+    def poi(lam, k):
+        lam = max(0.001, lam)
+        return _math.exp(-lam) * (lam ** k) / _math.factorial(k)
+
+    def p_at_least(lam, n):
+        return max(0.0, 1 - sum(poi(lam, k) for k in range(int(n))))
+
+    # ── MS pazar olasılıkları ─────────────────────────────────────
     cur = total_goals
-    thresholds = [1.5, 2.5, 3.5, 4.5]
     market_probs = {}
-    for thr in thresholds:
-        needed = thr - cur  # bu kadar daha gol lazım
+    for thr in [1.5, 2.5, 3.5, 4.5]:
+        needed = thr - cur
         if needed <= 0:
             market_probs[f"o{int(thr*10)}"] = 99.0
             market_probs[f"u{int(thr*10)}"] = 1.0
         else:
-            # Poisson: kalan sürede en az `needed` gol
-            p_under = sum(poi_prob(expected_remaining, k) for k in range(int(needed)))
-            p_over  = round((1 - p_under) * 100, 1)
+            p_over = round(p_at_least(expected_ms, needed) * 100, 1)
             market_probs[f"o{int(thr*10)}"] = p_over
-            market_probs[f"u{int(thr*10)}"] = round(p_under * 100, 1)
+            market_probs[f"u{int(thr*10)}"] = round(100 - p_over, 1)
 
-    # Her iki takım gol atar mı (KG VAR) — kalan sürede
-    kgv_h_score = h_score > 0
-    kgv_a_score = a_score > 0
-    exp_h = (live_xg_h if live_xg_h > 0.05 else form_xg_h * rem_frac) * dan_multiplier
-    exp_a = (live_xg_a if live_xg_a > 0.05 else form_xg_a * rem_frac) * dan_multiplier
+    # ── İY pazar olasılıkları (sadece 1. yarı devam ediyorsa) ─────
+    ht_market = {}
+    if is_first_half and ht_remaining > 0:
+        ht_cur = total_goals  # İY'deki mevcut goller
+        for thr in [0.5, 1.5, 2.5]:
+            needed = thr - ht_cur
+            if needed <= 0:
+                ht_market[f"ht_o{int(thr*10)}"] = 99.0
+                ht_market[f"ht_u{int(thr*10)}"] = 1.0
+            else:
+                p_over = round(p_at_least(expected_ht, needed) * 100, 1)
+                ht_market[f"ht_o{int(thr*10)}"] = p_over
+                ht_market[f"ht_u{int(thr*10)}"] = round(100 - p_over, 1)
 
-    # KG VAR: her iki takım zaten gol atmışsa garantili, değilse olasılık
-    if kgv_h_score and kgv_a_score:
+        # İY KG VAR
+        if h_score > 0 and a_score > 0:
+            ht_market["ht_kg_var"] = 99.0
+        elif h_score > 0:
+            ht_market["ht_kg_var"] = round(p_at_least(exp_a_ht, 1) * 100, 1)
+        elif a_score > 0:
+            ht_market["ht_kg_var"] = round(p_at_least(exp_h_ht, 1) * 100, 1)
+        else:
+            ht_market["ht_kg_var"] = round(p_at_least(exp_h_ht, 1) * p_at_least(exp_a_ht, 1) * 100, 1)
+
+        # İY'de sonraki gol hangi takım
+        p_h_next_ht = round(p_at_least(exp_h_ht, 1) * 100, 1)
+        p_a_next_ht = round(p_at_least(exp_a_ht, 1) * 100, 1)
+        ht_market["ht_next_h"] = p_h_next_ht
+        ht_market["ht_next_a"] = p_a_next_ht
+
+    # ── MS KG VAR ────────────────────────────────────────────────
+    if h_score > 0 and a_score > 0:
         p_kg_var = 99.0
-    elif kgv_h_score:
-        p_kg_var = round((1 - poi_prob(max(0.05, exp_a), 0)) * 100, 1)
-    elif kgv_a_score:
-        p_kg_var = round((1 - poi_prob(max(0.05, exp_h), 0)) * 100, 1)
+    elif h_score > 0:
+        p_kg_var = round(p_at_least(exp_a_rem, 1) * 100, 1)
+    elif a_score > 0:
+        p_kg_var = round(p_at_least(exp_h_rem, 1) * 100, 1)
     else:
-        p_h_scores = 1 - poi_prob(max(0.05, exp_h), 0)
-        p_a_scores = 1 - poi_prob(max(0.05, exp_a), 0)
-        p_kg_var   = round(p_h_scores * p_a_scores * 100, 1)
+        p_kg_var = round(p_at_least(exp_h_rem, 1) * p_at_least(exp_a_rem, 1) * 100, 1)
+
+    # ── Genel metrikler ───────────────────────────────────────────
+    p_next_goal = round(p_at_least(expected_ms, 1) * 100, 1)
+    p_next_h    = round(p_at_least(exp_h_rem, 1) * 100, 1)
+    p_next_a    = round(p_at_least(exp_a_rem, 1) * 100, 1)
+
+    # Momentum skoru (0-100, ev lehine)
+    total_attacks = dan_h + dan_a + shots_h + shots_a
+    if total_attacks > 0:
+        momentum_h = round((dan_h + shots_on_h * 1.5) / max(1, dan_h + dan_a + shots_on_h + shots_on_a) * 100)
+    else:
+        momentum_h = 50
 
     return {
-        "expected_remaining": round(expected_remaining, 2),
+        # Temel
+        "elapsed":            elapsed,
+        "remaining_min":      ms_remaining,
+        "ht_remaining_min":   ht_remaining,
+        "is_first_half":      is_first_half,
+        "expected_remaining": round(expected_ms, 2),
+        "expected_ht":        round(expected_ht, 2),
         "xg_rate_per90":      round(xg_rate, 2),
+        # MS
         "p_next_goal":        p_next_goal,
-        "p_2min_goal":        p_2min_goal,
+        "p_next_h":           p_next_h,
+        "p_next_a":           p_next_a,
         "p_kg_var":           p_kg_var,
-        "remaining_min":      remaining,
+        # Momentum
+        "momentum_h":         momentum_h,
+        "dan_multiplier":     round(combined_multiplier, 2),
+        # Pazar olasılıkları
         **market_probs,
+        **ht_market,
     }
 
 def build_live_prompt(h, a, minute, h_score, a_score, ht_h, ht_a,
                       live_stats, lp, hf, af, h2h):
     """
-    Canlı maç Groq prompt'u — gol bahsi odaklı.
+    Canlı maç — İY + MS gol bahsi odaklı profesyonel Groq prompt.
     """
-    fv = lambda d,k,dv=0: d.get(k,dv) if d else dv
+    fv = lambda d, k, dv=0: d.get(k, dv) if d else dv
 
-    stat_lines = f"""
-CANLI İSTATİSTİKLER (dk {minute}):
-  Skor: {h} {h_score} – {a_score} {a} (İY: {ht_h}-{ht_a})
-  Top: %{live_stats.get('possession_h',50)} – %{live_stats.get('possession_a',50)}
-  Şut: {live_stats.get('shots_h',0)} – {live_stats.get('shots_a',0)} (İsabetli: {live_stats.get('shots_on_h',0)}-{live_stats.get('shots_on_a',0)})
-  Tehlikeli Atak: {live_stats.get('dangerous_h',0)} – {live_stats.get('dangerous_a',0)}
-  Korner: {live_stats.get('corners_h',0)} – {live_stats.get('corners_a',0)}
-  Sarı Kart: {live_stats.get('yellow_h',0)} – {live_stats.get('yellow_a',0)}
-  xG: {live_stats.get('xg_h',0):.2f} – {live_stats.get('xg_a',0):.2f}"""
+    is_ht = lp.get("is_first_half", minute <= 45)
+    ht_rem = lp.get("ht_remaining_min", 0)
+    ms_rem = lp.get("remaining_min", 0)
 
-    prob_lines = f"""
-KALAN SÜRE OLASILILKLARI ({lp['remaining_min']} dk kaldı):
-  Beklenen ek gol: {lp['expected_remaining']}
-  Sonraki gol ihtimali: %{lp['p_next_goal']}
-  KG VAR ihtimali: %{lp['p_kg_var']}
-  1.5 Üst: %{lp.get('o15',0)} | 2.5 Üst: %{lp.get('o25',0)} | 3.5 Üst: %{lp.get('o35',0)}
-  2.5 Alt: %{lp.get('u25',0)} | 3.5 Alt: %{lp.get('u35',0)}"""
+    # ── Stat bloğu ────────────────────────────────────────────────
+    stat_block = f"""CANLI İSTATİSTİKLER — Dakika {minute}:
+  Skor: {h} {h_score} – {a_score} {a}{"  (1. Yarı)" if is_ht else "  (2. Yarı / İY: " + str(ht_h) + "-" + str(ht_a) + ")"}
+  Top Kontrolü: %{live_stats.get('possession_h',50)} EV — %{live_stats.get('possession_a',50)} DEP
+  Şut (İsabetli): {int(live_stats.get('shots_h',0))} ({int(live_stats.get('shots_on_h',0))}) EV — {int(live_stats.get('shots_on_a',0))} ({int(live_stats.get('shots_a',0))}) DEP
+  Tehlikeli Atak: {int(live_stats.get('dangerous_h',0))} EV — {int(live_stats.get('dangerous_a',0))} DEP
+  xG: {live_stats.get('xg_h',0):.2f} EV — {live_stats.get('xg_a',0):.2f} DEP
+  Korner: {int(live_stats.get('corners_h',0))} EV — {int(live_stats.get('corners_a',0))} DEP
+  Sarı Kart: {int(live_stats.get('yellow_h',0))} EV — {int(live_stats.get('yellow_a',0))} DEP
+  Momentum Skoru (0=dep baskısı, 100=ev baskısı): {lp.get('momentum_h',50)}/100
+  Atak Çarpanı: x{lp.get('dan_multiplier',1.0)}"""
 
-    form_lines = f"""
-ÖNCEKİ FORM (tarihsel):
-  {h}: {fv(hf,'form_str','?')} | Ort gol: {fv(hf,'avg_gf',0)} att / {fv(hf,'avg_gc',0)} yedi | 2.5 Üst: {fv(hf,'o25',0)}/{fv(hf,'n',1)} maç
-  {a}: {fv(af,'form_str','?')} | Ort gol: {fv(af,'avg_gf',0)} att / {fv(af,'avg_gc',0)} yedi | 2.5 Üst: {fv(af,'o25',0)}/{fv(af,'n',1)} maç
-  H2H: Ort gol {h2h.get('avg_goals',0)}/maç | 2.5 Üst: %{h2h.get('o25_pct',0)} | KG VAR: %{h2h.get('btts_pct',0)}"""
+    # ── İY olasılık bloğu (sadece 1. yarıda) ─────────────────────
+    ht_block = ""
+    if is_ht and ht_rem > 0:
+        ht_block = f"""
+İLK YARI KALAN SÜRE ({ht_rem} dk kaldı):
+  İY Mevcut Gol: {h_score + a_score} | Beklenen Ek İY Gol: {lp.get('expected_ht', 0)}
+  İY 0.5 ÜST: %{lp.get('ht_o5', 0)} | İY 0.5 ALT: %{lp.get('ht_u5', 0)}
+  İY 1.5 ÜST: %{lp.get('ht_o15', 0)} | İY 1.5 ALT: %{lp.get('ht_u15', 0)}
+  İY 2.5 ÜST: %{lp.get('ht_o25', 0)}
+  İY KG VAR: %{lp.get('ht_kg_var', 0)}
+  Sonraki İY Gol EV: %{lp.get('ht_next_h', 0)} | Sonraki İY Gol DEP: %{lp.get('ht_next_a', 0)}
+  Tarihsel: {h} İY ort gol {fv(hf,'ht_avg_gf',0)} | {a} İY ort gol {fv(af,'ht_avg_gf',0)}
+  H2H İY: {h2h.get('ht_hw',0)}G-{h2h.get('ht_dr',0)}B-{h2h.get('ht_aw',0)}M"""
 
-    return f"""Sen bir canlı bahis uzmanısın. Türkçe yaz. Sadece bu maça özgü, veri bazlı yorum yap.
+    # ── MS olasılık bloğu ─────────────────────────────────────────
+    ms_block = f"""
+MAÇ SONU ({ms_rem} dk kaldı):
+  Beklenen Ek Gol: {lp.get('expected_remaining', 0)} | Sonraki Gol: %{lp.get('p_next_goal', 0)}
+  Sonraki Gol EV: %{lp.get('p_next_h', 0)} | Sonraki Gol DEP: %{lp.get('p_next_a', 0)}
+  1.5 ÜST: %{lp.get('o15', 0)} | 2.5 ÜST: %{lp.get('o25', 0)} | 3.5 ÜST: %{lp.get('o35', 0)}
+  2.5 ALT: %{lp.get('u25', 0)} | 3.5 ALT: %{lp.get('u35', 0)}
+  KG VAR: %{lp.get('p_kg_var', 0)}"""
 
-MAÇ: {h} vs {a} — DAKİKA: {minute}'
-{stat_lines}
-{prob_lines}
-{form_lines}
+    # ── Form bloğu ────────────────────────────────────────────────
+    form_block = f"""
+TARİHSEL FORM:
+  {h}: {fv(hf,'form_str','?')} | Ort gol: {fv(hf,'avg_gf',0)} att/{fv(hf,'avg_gc',0)} yedi
+     İY ort: {fv(hf,'ht_avg_gf',0)} att/{fv(hf,'ht_avg_gc',0)} yedi | 2Y ort: {fv(hf,'st_avg_gf',0)}/{fv(hf,'st_avg_gc',0)}
+     2.5 Üst: {fv(hf,'o25',0)}/{fv(hf,'n',1)} maç | KG VAR: {fv(hf,'btts',0)}/{fv(hf,'n',1)}
+  {a}: {fv(af,'form_str','?')} | Ort gol: {fv(af,'avg_gf',0)} att/{fv(af,'avg_gc',0)} yedi
+     İY ort: {fv(af,'ht_avg_gf',0)} att/{fv(af,'ht_avg_gc',0)} yedi | 2Y ort: {fv(af,'st_avg_gf',0)}/{fv(af,'st_avg_gc',0)}
+     2.5 Üst: {fv(af,'o25',0)}/{fv(af,'n',1)} maç | KG VAR: {fv(af,'btts',0)}/{fv(af,'n',1)}
+  H2H: Ort {h2h.get('avg_goals',0)} gol/maç | 2.5 Üst %{h2h.get('o25_pct',0)} | KG VAR %{h2h.get('btts_pct',0)}
+     Son İY Skorları: {' '.join(h2h.get('ht_scores',[])[:4])}"""
 
-AYNEN bu formatta yaz:
+    # ── Prompt ───────────────────────────────────────────────────
+    iy_section = f"""
+### 2. İLK YARI GOL ANALİZİ
+{f"İY {ht_rem} dakika kaldı — mevcut: {h_score}-{a_score}" if is_ht and ht_rem > 0 else "İLK YARI TAMAMLANDI — İY skoru: " + str(ht_h) + "-" + str(ht_a)}
+{"[Kalan İY süresinde gol olup olmayacağını analiz et: xG hızı, şut baskısı, atak yoğunluğu ve tarihsel İY ortalamasını kullanarak İY 0.5 Üst/Alt + KG VAR/YOK için veri bazlı yorum yap]" if is_ht and ht_rem > 0 else "[İY sonucu ve 2. yarıya nasıl etki eder yorumla — skorun 2Y gol beklentisine etkisi]"}
 
-### DURUM ANALİZİ
-[Mevcut skoru, istatistik üstünlüğünü ve baskı durumunu 2 cümleyle özetle]
+İY BAHİS TAVSİYESİ:
+{"IY_BAHSI_1: [pazar adı] — [gerekçe] — GÜVENİLİRLİK: [YÜKSEK/ORTA/DÜŞÜK]" if is_ht and ht_rem > 0 else "IY_BAHSI_1: İY tamamlandı — 2Y analizine odaklan"}
+{"IY_BAHSI_2: [pazar adı] — [gerekçe] — GÜVENİLİRLİK: [YÜKSEK/ORTA/DÜŞÜK]" if is_ht and ht_rem > 0 else ""}""" if is_ht else f"""
+### 2. İLK YARI SONUCU
+İY skoru: {ht_h}-{ht_a} (EV {ht_h}, DEP {ht_a})
+[İY sonucunun 2Y gol beklentisine etkisi — hangi takım 2Y'da daha fazla gol arar, neden?]"""
 
-### GOL TAHMİNİ
-Beklenen ek gol: {lp['expected_remaining']} | Sonraki gol %{lp['p_next_goal']}
-[Hangi takımın gol atacağı daha olası ve neden — şut/atak verisiyle gerekçele]
+    return f"""Sen bir profesyonel canlı bahis analistisin. Türkçe yaz. Her cümle bu maça özgü olmalı — jenerik yorum yasak.
 
-### GOL BAHİSLERİ TAVSİYELERİ
-GOL_BAHSI_1: [pazar adı] — [gerekçe kısa] — GÜVENİLİRLİK: [YÜKSEK/ORTA/DÜŞÜK]
-GOL_BAHSI_2: [pazar adı] — [gerekçe kısa] — GÜVENİLİRLİK: [YÜKSEK/ORTA/DÜŞÜK]
-GOL_BAHSI_3: [pazar adı] — [gerekçe kısa] — GÜVENİLİRLİK: [YÜKSEK/ORTA/DÜŞÜK]
+MAÇ: {h} (EV) vs {a} (DEP) — Dakika: {minute}'
+{stat_block}
+{ht_block}
+{ms_block}
+{form_block}
 
-Pazar seçenekleri: "2.5 ÜST", "2.5 ALT", "3.5 ÜST", "KG VAR", "KG YOK", "Sonraki gol EV", "Sonraki gol DEP", "Gol YOK (0.5 Alt)", "Her iki yarı gol"
+AYNEN bu formatta yaz (başlıkları değiştirme):
 
-### BEKLE SİNYALİ
-[Bahis açılmamalı mı? Hangi durumda beklemek daha akıllıca? 1 cümle]"""
+### 1. CANLI DURUM ANALİZİ
+[Hangi takım baskıda, momentum nerede, skor maça nasıl yansıyor — istatistik rakamlarını kullanarak 3 cümle]
+
+{iy_section}
+
+### 3. MAÇ SONU GOL BEKLENT İSİ
+[xG hızı + form + kalan süreyi harmanlayarak MS gol beklentisini yorumla — özellikle 2.5 Üst/Alt ve KG VAR/YOK için net karar ver]
+
+### 4. GOL BAHİS TAVSİYELERİ
+GOL_BAHSI_1: [pazar] — [gerekçe, max 12 kelime] — GÜVENİLİRLİK: [YÜKSEK/ORTA/DÜŞÜK]
+GOL_BAHSI_2: [pazar] — [gerekçe, max 12 kelime] — GÜVENİLİRLİK: [YÜKSEK/ORTA/DÜŞÜK]
+GOL_BAHSI_3: [pazar] — [gerekçe, max 12 kelime] — GÜVENİLİRLİK: [YÜKSEK/ORTA/DÜŞÜK]
+
+Pazar seçenekleri (MOdele ipucu): "İY 0.5 ÜST", "İY 0.5 ALT", "İY 1.5 ÜST", "İY KG VAR", "İY KG YOK",
+"2.5 ÜST", "2.5 ALT", "3.5 ÜST", "KG VAR", "KG YOK",
+"Sonraki gol EV", "Sonraki gol DEP", "Gol YOK (0.5 Alt)",
+"İY gol olmaz → MS gol olur"
+
+### 5. BEKLE / GEÇ SİNYALİ
+BEKLE: [Hangi bahis şu an açılmamalı ve neden — 1 cümle]
+GEÇ: [Hangi pazar için oran düştüyse artık geç — 1 cümle]"""
 
 # ══════════════════════════════════════════════════════════════════
 # VERİ İŞLEME
@@ -2703,8 +2826,7 @@ def parse_analysis(text):
     return secs, scenarios, preds, iy_special, ms_special
 
 def render_live_match(m, live_stats, lp, analysis_text, hf, af, h2h):
-    """Canlı maç panelini render et."""
-    import re as _re
+    """Canlı maç — İY + MS profesyonel analiz paneli."""
 
     h      = m["homeTeam"]["name"]
     a      = m["awayTeam"]["name"]
@@ -2713,27 +2835,31 @@ def render_live_match(m, live_stats, lp, analysis_text, hf, af, h2h):
     ht_h   = m.get("score",{}).get("halfTime",{}).get("home") or 0
     ht_a   = m.get("score",{}).get("halfTime",{}).get("away") or 0
     minute = m.get("minute", m.get("currentPeriodStartTime", 0)) or "?"
-    status = m.get("status","IN_PLAY")
+    is_ht  = lp.get("is_first_half", int(str(minute).replace("'","") or 45) <= 45)
+    ht_rem = lp.get("ht_remaining_min", 0)
+    ms_rem = lp.get("remaining_min", 0)
+    fv     = lambda d,k,dv=0: d.get(k,dv) if d else dv
 
     # ── BAŞLIK ───────────────────────────────────────────────────
+    phase = f"1. Yarı — {ht_rem}dk kaldı" if is_ht and ht_rem > 0 else ("Devre Arası" if is_ht else f"2. Yarı — {ms_rem}dk kaldı")
     st.markdown(
         f'<div class="live-header">'
         f'<div class="live-dot"></div>'
         f'<span class="live-badge">CANLI</span>'
-        f'<span class="live-title">{h} <span style="color:#4a6880">vs</span> {a}</span>'
+        f'<span class="live-title">{h} <b style="color:#d0dce8"> vs </b>{a}'
+        f' &nbsp;·&nbsp; <span style="color:#4a6880;font-size:.78rem">{phase}</span></span>'
         f'<span class="live-minute">{minute}\'</span>'
         f'</div>', unsafe_allow_html=True
     )
 
     # ── SKOR KARTI ───────────────────────────────────────────────
-    events_h = ""
-    events_a = ""
+    events_h = events_a = ""
     for ev in m.get("goals", []):
-        t = ev.get("team",{}).get("id")
+        t  = ev.get("team",{}).get("id")
         sc = ev.get("scorer",{}).get("name","?").split()[-1]
         mi = ev.get("minute","?")
         if t == m["homeTeam"]["id"]: events_h += f"⚽ {sc} {mi}' "
-        else: events_a += f"⚽ {sc} {mi}' "
+        else:                        events_a += f"⚽ {sc} {mi}' "
 
     st.markdown(f"""
 <div class="live-score-wrap">
@@ -2744,7 +2870,7 @@ def render_live_match(m, live_stats, lp, analysis_text, hf, af, h2h):
     </div>
     <div class="ls-score">
       <div class="lss-main">{h_sc} – {a_sc}</div>
-      <div class="lss-ht">İY: {ht_h}–{ht_a}</div>
+      <div class="lss-ht">{"İY devam" if is_ht else f"İY: {ht_h}–{ht_a}"}</div>
     </div>
     <div class="ls-team">
       <div class="lst-name away">{a}</div>
@@ -2755,84 +2881,168 @@ def render_live_match(m, live_stats, lp, analysis_text, hf, af, h2h):
 
     # ── İSTATİSTİK BARLARI ───────────────────────────────────────
     stats_display = [
-        ("Top Kontrolü", f"%{int(live_stats['possession_h'])}", f"%{int(live_stats['possession_a'])}",
-         live_stats['possession_h'], live_stats['possession_a']),
-        ("Şut (İsabetli)", f"{int(live_stats['shots_h'])} ({int(live_stats['shots_on_h'])})",
-         f"{int(live_stats['shots_on_a'])} ({int(live_stats['shots_a'])})",
-         live_stats['shots_h'], live_stats['shots_a']),
-        ("Tehlikeli Atak", str(int(live_stats['dangerous_h'])), str(int(live_stats['dangerous_a'])),
-         live_stats['dangerous_h'], live_stats['dangerous_a']),
-        ("Korner", str(int(live_stats['corners_h'])), str(int(live_stats['corners_a'])),
-         live_stats['corners_h'], live_stats['corners_a']),
-        ("xG", f"{live_stats['xg_h']:.2f}", f"{live_stats['xg_a']:.2f}",
-         live_stats['xg_h']*10, live_stats['xg_a']*10),
-        ("Sarı Kart", str(int(live_stats['yellow_h'])), str(int(live_stats['yellow_a'])),
-         live_stats['yellow_h'], live_stats['yellow_a']),
+        ("Top Kontrolü",  f"%{int(live_stats['possession_h'])}",  f"%{int(live_stats['possession_a'])}",   live_stats['possession_h'],  live_stats['possession_a']),
+        ("Şut/İsabetli",  f"{int(live_stats['shots_h'])}/{int(live_stats['shots_on_h'])}",
+                          f"{int(live_stats['shots_on_a'])}/{int(live_stats['shots_a'])}",
+                          live_stats['shots_h'],  live_stats['shots_a']),
+        ("Teh. Atak",     str(int(live_stats['dangerous_h'])),     str(int(live_stats['dangerous_a'])),     live_stats['dangerous_h'],   live_stats['dangerous_a']),
+        ("Korner",        str(int(live_stats['corners_h'])),        str(int(live_stats['corners_a'])),        live_stats['corners_h'],     live_stats['corners_a']),
+        ("xG",            f"{live_stats['xg_h']:.2f}",             f"{live_stats['xg_a']:.2f}",             live_stats['xg_h']*10,       live_stats['xg_a']*10),
+        ("Sarı Kart",     str(int(live_stats['yellow_h'])),         str(int(live_stats['yellow_a'])),         live_stats['yellow_h'],      live_stats['yellow_a']),
     ]
-
-    stat_html = '<div style="padding:.6rem 0">'
+    stat_html = '<div style="padding:.5rem 0">'
     for lbl, hv, av, hw, aw in stats_display:
         total = max(hw + aw, 0.01)
         h_w   = round(hw / total * 100)
-        a_w   = 100 - h_w
         stat_html += (
             f'<div class="stat-bar-row">'
             f'<div class="sbr-val home">{hv}</div>'
             f'<div class="sbr-bars" style="justify-content:flex-end">'
-            f'<div class="sbr-bar-h" style="width:{h_w}%;max-width:100%"></div>'
-            f'</div>'
+            f'<div class="sbr-bar-h" style="width:{h_w}%;max-width:100%"></div></div>'
             f'<div class="sbr-label">{lbl}</div>'
             f'<div class="sbr-bars">'
-            f'<div class="sbr-bar-a" style="width:{a_w}%;max-width:100%"></div>'
-            f'</div>'
+            f'<div class="sbr-bar-a" style="width:{100-h_w}%;max-width:100%"></div></div>'
             f'<div class="sbr-val away">{av}</div>'
             f'</div>'
         )
+
+    # Momentum bar
+    mom = lp.get("momentum_h", 50)
+    stat_html += f"""
+<div class="momentum-wrap">
+  <div style="font-size:.54rem;color:#4a6880;text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px">
+    Momentum &nbsp;<span style="color:#4c9eff">{h[:12]}</span> ← → <span style="color:#ff7070">{a[:12]}</span>
+  </div>
+  <div class="mom-bar-track">
+    <div class="mom-bar-fill" style="width:{mom}%;background:linear-gradient(90deg,#1d4ed8,#4c9eff)"></div>
+  </div>
+  <div class="mom-labels"><span>{mom}%</span><span>{100-mom}%</span></div>
+</div>"""
     stat_html += '</div>'
     st.markdown(stat_html + '</div>', unsafe_allow_html=True)
 
-    # ── KALAN SÜRE OLASILILKLARI ─────────────────────────────────
-    rem = lp['remaining_min']
-    st.markdown(f"""
-<div style="background:#09101e;border:1px solid #1c2e44;border-radius:10px;padding:.9rem 1.4rem;margin-bottom:.7rem">
+    # ── İLK YARI PANEL (1Y devam ediyorsa tam panel, bittiyse özet) ─
+    if is_ht and ht_rem > 0:
+        # 1. Yarı devam ediyor — İY olasılıkları büyük göster
+        st.markdown(f"""
+<div style="background:#09101e;border:2px solid #1d4ed8;border-radius:10px;
+padding:.9rem 1.4rem;margin-bottom:.7rem">
   <div style="font-size:.56rem;font-weight:700;letter-spacing:.13em;text-transform:uppercase;
-  color:#4a6880;margin-bottom:8px;border-bottom:1px solid #1c2e44;padding-bottom:4px">
-  ⏱ Kalan {rem} Dakika — Gol Olasılıkları</div>
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:8px">
-    {_prob_box("Sonraki Gol", lp['p_next_goal'])}
-    {_prob_box("KG VAR", lp['p_kg_var'])}
-    {_prob_box("2.5 ÜST", lp.get('o25',0))}
-    {_prob_box("2.5 ALT", lp.get('u25',0))}
+  color:#4c9eff;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #1c2e44">
+  ⏱ İLK YARI — {ht_rem} dakika kaldı &nbsp;·&nbsp; Mevcut: {h_sc}–{a_sc}</div>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:6px">
+    {_prob_box("İY 0.5 ÜST", lp.get('ht_o5', 0))}
+    {_prob_box("İY 0.5 ALT", lp.get('ht_u5', 0))}
+    {_prob_box("İY 1.5 ÜST", lp.get('ht_o15', 0))}
+    {_prob_box("İY KG VAR",  lp.get('ht_kg_var', 0))}
   </div>
   <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
-    {_prob_box("1.5 ÜST", lp.get('o15',0))}
-    {_prob_box("3.5 ÜST", lp.get('o35',0))}
-    {_prob_box("Bkl.Gol", lp['expected_remaining'], is_xg=True)}
+    {_prob_box("Snrk İY Gol EV",  lp.get('ht_next_h', 0))}
+    {_prob_box("Snrk İY Gol DEP", lp.get('ht_next_a', 0))}
+    {_prob_box("Bkl.İY Gol", lp.get('expected_ht', 0), is_xg=True)}
+  </div>
+  <div style="margin-top:8px;font-size:.62rem;color:#4a6880">
+    Tarihsel → {h}: İY ort <b style="color:#4c9eff">{fv(hf,'ht_avg_gf',0)}</b> gol &nbsp;|&nbsp;
+    {a}: İY ort <b style="color:#ff7070">{fv(af,'ht_avg_gf',0)}</b> gol &nbsp;|&nbsp;
+    H2H İY: {h2h.get('ht_hw',0)}G–{h2h.get('ht_dr',0)}B–{h2h.get('ht_aw',0)}M
+  </div>
+</div>
+""", unsafe_allow_html=True)
+    else:
+        # İlk yarı bitti — özet göster
+        ht_winner = f"{h} önde" if ht_h > ht_a else (f"{a} önde" if ht_a > ht_h else "Berabere")
+        st.markdown(f"""
+<div style="background:#09101e;border:1px solid #1c2e44;border-radius:8px;
+padding:.7rem 1.2rem;margin-bottom:.7rem;display:flex;align-items:center;gap:12px">
+  <div style="font-size:.56rem;font-weight:700;color:#4a6880;text-transform:uppercase;letter-spacing:.1em">İY Sonucu</div>
+  <div style="font-size:1.1rem;font-weight:800;color:#d0dce8;font-family:JetBrains Mono,monospace">{ht_h}–{ht_a}</div>
+  <div style="font-size:.68rem;color:#4a6880">{ht_winner}</div>
+  <div style="margin-left:auto;font-size:.62rem;color:#4a6880">
+    2. Yarı için → {h}: 2Y ort <b style="color:#4c9eff">{fv(hf,'st_avg_gf',0)}</b> &nbsp;|&nbsp;
+    {a}: 2Y ort <b style="color:#ff7070">{fv(af,'st_avg_gf',0)}</b>
   </div>
 </div>
 """, unsafe_allow_html=True)
 
-    # ── GOL BAHİS TAVSİYELERİ ───────────────────────────────────
-    if analysis_text:
-        recs = _parse_goal_bets(analysis_text)
-        durum = _extract_section(analysis_text, "DURUM")
-        gol_tahmin = _extract_section(analysis_text, "GOL TAHMİNİ")
-        bekle = _extract_section(analysis_text, "BEKLE")
+    # ── MAÇ SONU PANEL ───────────────────────────────────────────
+    st.markdown(f"""
+<div style="background:#09101e;border:1px solid #1c2e44;border-radius:10px;
+padding:.9rem 1.4rem;margin-bottom:.7rem">
+  <div style="font-size:.56rem;font-weight:700;letter-spacing:.13em;text-transform:uppercase;
+  color:#4a6880;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #1c2e44">
+  🏁 MAÇ SONU — {ms_rem} dakika kaldı &nbsp;·&nbsp; Bklenen ek gol: {lp.get('expected_remaining',0)}</div>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:6px">
+    {_prob_box("Snrk Gol EV",  lp.get('p_next_h',0))}
+    {_prob_box("Snrk Gol DEP", lp.get('p_next_a',0))}
+    {_prob_box("KG VAR",       lp.get('p_kg_var',0))}
+    {_prob_box("2.5 ÜST",      lp.get('o25',0))}
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
+    {_prob_box("2.5 ALT", lp.get('u25',0))}
+    {_prob_box("1.5 ÜST", lp.get('o15',0))}
+    {_prob_box("3.5 ÜST", lp.get('o35',0))}
+    {_prob_box("3.5 ALT", lp.get('u35',0))}
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
+    # ── ANALİZ METNİ + BAHİS TAVSİYELERİ ────────────────────────
+    if analysis_text:
+        import re as _re
+
+        # Section'ları çek
+        durum     = _extract_section(analysis_text, "CANLI DURUM")
+        iy_analiz = _extract_section(analysis_text, "İLK YARI")
+        ms_analiz = _extract_section(analysis_text, "MAÇ SONU")
+        all_recs  = _parse_goal_bets(analysis_text)
+        iy_recs   = _parse_iy_bets(analysis_text)
+        bekle_txt = _extract_bekle_gec(analysis_text)
+
+        # Durum analizi
         if durum:
             st.markdown(f"""
 <div style="background:#0d1829;border:1px solid #1c2e44;border-radius:8px;
-padding:.8rem 1.2rem;margin-bottom:.7rem;font-size:.76rem;color:#7a9ab8;line-height:1.7">
-<span style="font-size:.56rem;font-weight:700;letter-spacing:.13em;text-transform:uppercase;
-color:#4a6880;display:block;margin-bottom:4px">📊 Durum Analizi</span>
-{durum}</div>""", unsafe_allow_html=True)
+padding:.75rem 1.1rem;margin-bottom:.6rem">
+  <div style="font-size:.54rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;
+  color:#4a6880;margin-bottom:5px">📊 Canlı Durum</div>
+  <div style="font-size:.76rem;color:#7a9ab8;line-height:1.75">{durum}</div>
+</div>""", unsafe_allow_html=True)
 
-        if recs:
-            st.markdown('<div style="font-size:.56rem;font-weight:700;letter-spacing:.13em;'
-                       'text-transform:uppercase;color:#4a6880;margin-bottom:6px">🎯 Gol Bahis Tavsiyeleri</div>',
+        # İY analizi (sadece ilk yarı devam ediyorsa veya yeni bittiyse)
+        if iy_analiz:
+            st.markdown(f"""
+<div style="background:#060f20;border:1px solid #1d4ed8;border-radius:8px;
+padding:.75rem 1.1rem;margin-bottom:.6rem">
+  <div style="font-size:.54rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;
+  color:#4c9eff;margin-bottom:5px">⏱ İlk Yarı Analizi</div>
+  <div style="font-size:.76rem;color:#7a9ab8;line-height:1.75">{iy_analiz}</div>
+</div>""", unsafe_allow_html=True)
+
+        # İY bahis kartları
+        if iy_recs:
+            st.markdown('<div style="font-size:.54rem;font-weight:700;letter-spacing:.12em;'
+                       'text-transform:uppercase;color:#4c9eff;margin-bottom:5px">⏱ İY Bahis Tavsiyeleri</div>',
                        unsafe_allow_html=True)
-            cols = st.columns(len(recs))
-            for i, (rec, col) in enumerate(zip(recs, cols)):
+            cols = st.columns(len(iy_recs))
+            for rec, col in zip(iy_recs, cols):
+                conf = rec.get("confidence","ORTA").upper()
+                cls  = "strong" if "YÜKSEK" in conf else ("medium" if "ORTA" in conf else "risky")
+                with col:
+                    st.markdown(f"""
+<div class="goal-rec-box {cls}" style="border-color:#1d4ed8">
+  <div class="grb-label" style="color:#4c9eff">{'🔒 İY BANKO' if 'YÜKSEK' in conf else '⚡ İY ORTA'}</div>
+  <div class="grb-bet">{rec.get('market','?')}</div>
+  <div class="grb-why">{rec.get('why','')[:80]}</div>
+  <div class="grb-conf" style="color:#4c9eff">{conf}</div>
+</div>""", unsafe_allow_html=True)
+
+        # MS bahis kartları
+        if all_recs:
+            st.markdown('<div style="font-size:.54rem;font-weight:700;letter-spacing:.12em;'
+                       'text-transform:uppercase;color:#4a6880;margin:.6rem 0 5px">🏁 MS Bahis Tavsiyeleri</div>',
+                       unsafe_allow_html=True)
+            cols = st.columns(len(all_recs))
+            for rec, col in zip(all_recs, cols):
                 conf = rec.get("confidence","ORTA").upper()
                 cls  = "strong" if "YÜKSEK" in conf else ("medium" if "ORTA" in conf else "risky")
                 with col:
@@ -2844,54 +3054,78 @@ color:#4a6880;display:block;margin-bottom:4px">📊 Durum Analizi</span>
   <div class="grb-conf">{conf}</div>
 </div>""", unsafe_allow_html=True)
 
-        if bekle:
+        # Bekle / Geç sinyali
+        if bekle_txt:
+            bekle, gec = bekle_txt
             st.markdown(f"""
-<div style="background:#120e00;border:1px solid #b45309;border-radius:7px;
-padding:.6rem 1rem;margin-top:.5rem;font-size:.72rem;color:#f5a623">
-⏳ <b>Bekle:</b> {bekle}</div>""", unsafe_allow_html=True)
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:.5rem">
+  {"" if not bekle else f'<div style="background:#120e00;border:1px solid #b45309;border-radius:7px;padding:.5rem .9rem;font-size:.72rem;color:#f5a623">⏳ <b>Bekle:</b> {bekle}</div>'}
+  {"" if not gec else f'<div style="background:#04180a;border:1px solid #166534;border-radius:7px;padding:.5rem .9rem;font-size:.72rem;color:#3ecf7a">✅ <b>Geç:</b> {gec}</div>'}
+</div>""", unsafe_allow_html=True)
 
 def _prob_box(label, val, is_xg=False):
-    """Küçük olasılık kutusu HTML."""
     if is_xg:
-        color = "#4c9eff"
-        display = f"{val:.2f}" if isinstance(val, float) else str(val)
-        sub = "beklenen"
+        color   = "#4c9eff"
+        display = f"{float(val):.2f}"
+        sub     = "beklenen"
     else:
-        v = float(val)
-        color = "#3ecf7a" if v >= 65 else ("#f5a623" if v >= 40 else "#ff7070")
+        v       = float(val)
+        color   = "#3ecf7a" if v >= 65 else ("#f5a623" if v >= 40 else "#ff7070")
         display = f"%{v:.0f}"
-        sub = ""
+        sub     = ""
     return (f'<div style="background:#111f35;border:1px solid #1c2e44;border-radius:6px;'
             f'padding:7px 4px;text-align:center">'
-            f'<div style="font-size:.54rem;color:#4a6880;text-transform:uppercase;'
-            f'letter-spacing:.08em;margin-bottom:2px">{label}</div>'
-            f'<div style="font-size:1.1rem;font-weight:800;color:{color};'
+            f'<div style="font-size:.52rem;color:#4a6880;text-transform:uppercase;'
+            f'letter-spacing:.07em;margin-bottom:2px">{label}</div>'
+            f'<div style="font-size:1.05rem;font-weight:800;color:{color};'
             f'font-family:JetBrains Mono,monospace">{display}</div>'
-            f'{"<div style=font-size:.56rem;color:#4a6880>" + sub + "</div>" if sub else ""}'
-            f'</div>')
+            + (f'<div style="font-size:.52rem;color:#4a6880">{sub}</div>' if sub else '')
+            + '</div>')
 
 def _parse_goal_bets(text):
-    """Groq çıktısından GOL_BAHSI satırlarını parse et."""
+    """GOL_BAHSI satırlarını parse et."""
     import re as _re
     recs = []
     for line in text.splitlines():
-        line = line.strip()
-        m = _re.match(r'GOL_BAHSI_\d+\s*:\s*(.+?)\s*—\s*(.+?)\s*—\s*GÜVENİLİRLİK\s*:\s*(\w+)', line, _re.I)
+        m = _re.match(r'GOL_BAHSI_\d+\s*:\s*(.+?)\s*—\s*(.+?)\s*—\s*GÜVENİLİRLİK\s*:\s*(\w+)', line.strip(), _re.I)
         if m:
-            recs.append({"market": m.group(1).strip(), "why": m.group(2).strip(),
-                         "confidence": m.group(3).strip()})
+            recs.append({"market": m.group(1).strip(), "why": m.group(2).strip(), "confidence": m.group(3).strip()})
     return recs[:3]
 
-def _extract_section(text, keyword):
-    """Groq çıktısından bir section içeriğini çek."""
+def _parse_iy_bets(text):
+    """IY_BAHSI satırlarını parse et."""
     import re as _re
-    m = _re.search(rf'###\s*{keyword}.*?\n(.*?)(?=###|\Z)', text, _re.S | _re.I)
+    recs = []
+    for line in text.splitlines():
+        m = _re.match(r'IY_BAHSI_\d+\s*:\s*(.+?)\s*—\s*(.+?)\s*—\s*GÜVENİLİRLİK\s*:\s*(\w+)', line.strip(), _re.I)
+        if m and "tamamlandı" not in m.group(1).lower():
+            recs.append({"market": m.group(1).strip(), "why": m.group(2).strip(), "confidence": m.group(3).strip()})
+    return recs[:2]
+
+def _extract_section(text, keyword):
+    import re as _re
+    m = _re.search(rf'###\s*\d*\.?\s*{keyword}.*?\n(.*?)(?=###|\Z)', text, _re.S | _re.I)
     if m:
         content = m.group(1).strip()
-        # GOL_BAHSI satırlarını çıkar
-        content = _re.sub(r'GOL_BAHSI_\d+.*', '', content).strip()
-        return content[:300]
+        # Bahis satırlarını çıkar
+        content = _re.sub(r'(GOL_BAHSI|IY_BAHSI)_\d+.*', '', content).strip()
+        return content[:350]
     return ""
+
+def _extract_bekle_gec(text):
+    """BEKLE ve GEÇ satırlarını ayrı parse et."""
+    import re as _re
+    bekle = gec = ""
+    sec = _extract_section(text, "BEKLE")
+    if not sec:
+        return None
+    for line in sec.splitlines():
+        line = line.strip()
+        if line.upper().startswith("BEKLE"):
+            bekle = line.split(":",1)[-1].strip()[:150]
+        elif line.upper().startswith("GEÇ") or line.upper().startswith("GEC"):
+            gec = line.split(":",1)[-1].strip()[:150]
+    return (bekle, gec) if (bekle or gec) else None
 
 
 # ── VS UI ── (mevcut render_vs_ui burada)
