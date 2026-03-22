@@ -739,12 +739,14 @@ def fetch_fixtures_with_odds(couk_code):
     if result:
         return result
 
-    # 2. Güncel sezon CSV
+    # 2. Güncel sezon CSV — require_div ile sadece bu ligi filtrele
     for season in ["2526","2425"]:
         url = f"https://www.football-data.co.uk/mmz4281/{season}/{couk_code}.csv"
         rows = fetch_text(url)
         if rows:
-            r2 = extract_odds(rows)
+            # Sezon CSV'de Div kolonu yok ama sadece bu ligin CSV'si — require_div gerekmez
+            # Ama güvenlik için filtre uygula (bazı CSV'lerde Div var)
+            r2 = extract_odds(rows, require_div=None)
             if r2:
                 return r2
 
@@ -767,7 +769,9 @@ FD_TO_AF_LEAGUE = {
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def af_get(endpoint, params, key):
-    """API-Football'a istek at."""
+    """API-Football'a istek at. `key` cache key'e dahil edilir."""
+    # Not: Streamlit cache_data, mutable olmayan tüm argümanları cache key'e dahil eder.
+    # key (API anahtarı) str olduğu için otomatik dahil edilir — güvenli.
     try:
         r = requests.get(
             f"{AF_BASE}/{endpoint}",
@@ -776,12 +780,16 @@ def af_get(endpoint, params, key):
         )
         if r.status_code == 200:
             data = r.json()
-            # Kalan istek sayısını göster
-            rem = data.get("response") and r.headers.get("X-RateLimit-Remaining","?")
-            if debug: st.caption(f"🐛 AF /{endpoint} → {r.status_code} | Kalan: {rem}")
+            if debug:
+                rem = r.headers.get("X-RateLimit-Remaining","?")
+                st.caption(f"🐛 AF /{endpoint} → {r.status_code} | Kalan istek: {rem}")
             return data.get("response", [])
         if r.status_code == 401:
-            st.warning("⚠️ API-Football key geçersiz")
+            st.warning("⚠️ API-Football key geçersiz — dashboard.api-football.com'dan kontrol edin")
+        elif r.status_code == 499:
+            st.warning("⚠️ API-Football günlük limit doldu (100 istek/gün)")
+        if debug:
+            st.caption(f"🐛 AF /{endpoint} → HTTP {r.status_code}")
         return []
     except Exception as e:
         if debug: st.caption(f"🐛 AF error: {e}")
@@ -1405,25 +1413,29 @@ def odds_deviation(sources):
 # ── GROQ İLE OTOMATİK ORAN TAHMİNİ ─────────────────────────────
 def estimate_odds_with_groq(h, a, stats, hf, af, h2h, h_stand, a_stand):
     """
-    Groq Llama'ya bu maç için tahmini piyasa oranlarını sor.
-    xG modeli + form verisinden gerçekçi oran tahmini üretir.
-    Harici API gerekmez.
+    Groq Llama'ya bu maç için tahmini piyasa oranları sor.
+    SADECE gerçek veri yoksa fallback olarak kullanılır.
+    Kaynak etiketi 'groq-tahmin' veya 'model-tahmin' olarak işaretlenir.
     """
     fv = lambda d,k,dv=0: d.get(k,dv) if d else dv
     hs = h_stand or {}; as_ = a_stand or {}
 
-    mini_prompt = f"""Profesyonel futbol bahis analisti.
-Aşağıdaki verilere bakarak bu maç için SADECE piyasa oranı tahmin et.
-Başka hiçbir şey yazma — sadece 3 sayı.
+    # Gerçek xG değerlerini hesapla (stats'tan değil, form'dan)
+    hxg_real = fv(hf,'avg_gf',1.2)
+    axg_real = fv(af,'avg_gf',1.0)
 
-MAÇ: {h}(Ev) vs {a}(Dep)
-Model MS: 1=%{stats['p1']} X=%{stats['px']} 2=%{stats['p2']}
-xG: Ev={round(stats.get('p1',50)/100*2.5,2)} Dep={round(stats.get('p2',25)/100*4,2)}
-{h} Form: {fv(hf,'form_str','?')} {fv(hf,'pts5',0)}/15 | Gol ort: {fv(hf,'avg_gf',1.2)}
-{a} Form: {fv(af,'form_str','?')} {fv(af,'pts5',0)}/15 | Gol ort: {fv(af,'avg_gf',1.0)}
-Sıra: {h}={hs.get('position','?')} {a}={as_.get('position','?')}
+    mini_prompt = f"""Sen bir profesyonel futbol bahis analistisin.
+Bu maç için Bet365 tarzı gerçekçi piyasa oranı tahmin et.
+SADECE 3 satır yaz, başka HİÇBİR ŞEY yazma.
 
-Cevap formatı (sadece bu 3 satır, başka hiçbir şey):
+MAÇ: {h} (Ev) vs {a} (Deplasman)
+Poisson model: 1=%{stats['p1']} X=%{stats['px']} 2=%{stats['p2']}
+xG tahmini: {h}={hxg_real} gol/maç | {a}={axg_real} gol/maç
+{h} form: {fv(hf,'form_str','?')} son5={fv(hf,'pts5',0)}/15 puan
+{a} form: {fv(af,'form_str','?')} son5={fv(af,'pts5',0)}/15 puan
+Lig sırası: {h}={hs.get('position','?')} | {a}={as_.get('position','?')}
+
+Cevap SADECE şu 3 satır:
 1: [oran]
 X: [oran]
 2: [oran]"""
@@ -1434,42 +1446,55 @@ X: [oran]
             headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
             json={"model": "llama-3.1-8b-instant",
                   "messages": [{"role": "user", "content": mini_prompt}],
-                  "temperature": 0.1, "max_tokens": 60},
+                  "temperature": 0.05, "max_tokens": 40},
             timeout=30
         )
         r.raise_for_status()
         text = r.json()["choices"][0]["message"]["content"].strip()
         import re
-        o1_m = re.search(r"1:[\s]*([0-9.]+)", text)
-        ox_m = re.search(r"X:[\s]*([0-9.]+)", text)
-        o2_m = re.search(r"2:[\s]*([0-9.]+)", text)
-        if o1_m and ox_m and o2_m:
-            o1 = round(float(o1_m.group(1)), 2)
-            ox = round(float(ox_m.group(1)), 2)
-            o2 = round(float(o2_m.group(1)), 2)
-            # Makulluk kontrolü
-            if 1.05 <= o1 <= 20 and 1.05 <= ox <= 20 and 1.05 <= o2 <= 20:
-                return {"o1": o1, "ox": ox, "o2": o2,
-                        "o25_ov": None, "o25_un": None,
-                        "source": "groq-tahmin"}
+        # Satır satır parse et — daha güvenli
+        o1 = ox = o2 = None
+        for line in text.splitlines():
+            line = line.strip()
+            m1 = re.match(r'^1\s*:\s*([0-9]+\.?[0-9]*)$', line)
+            mx = re.match(r'^X\s*:\s*([0-9]+\.?[0-9]*)$', line)
+            m2 = re.match(r'^2\s*:\s*([0-9]+\.?[0-9]*)$', line)
+            if m1: o1 = round(float(m1.group(1)), 2)
+            if mx: ox = round(float(mx.group(1)), 2)
+            if m2: o2 = round(float(m2.group(1)), 2)
+        # Makulluk kontrolü: tüm oranlar 1.05–25 arasında ve toplam vig makul
+        if o1 and ox and o2:
+            if 1.05 <= o1 <= 25 and 1.05 <= ox <= 25 and 1.05 <= o2 <= 25:
+                implied_sum = 1/o1 + 1/ox + 1/o2
+                if 1.02 <= implied_sum <= 1.20:  # %2–%20 vig aralığı
+                    return {"o1": o1, "ox": ox, "o2": o2,
+                            "o25_ov": None, "o25_un": None,
+                            "source": "groq-tahmin"}
     except:
         pass
 
-    # Fallback: Poisson olasılıklarından basit oran hesapla
+    # Fallback: Poisson olasılıklarından doğrudan oran hesapla (%8 bookmaker marjı)
     try:
         p1 = max(5, stats["p1"]) / 100
         px = max(5, stats["px"]) / 100
         p2 = max(5, stats["p2"]) / 100
-        margin = 1.08  # %8 bookmaker marjı
-        return {
-            "o1": round(1 / p1 / margin, 2),
-            "ox": round(1 / px / margin, 2),
-            "o2": round(1 / p2 / margin, 2),
-            "o25_ov": None, "o25_un": None,
-            "source": "model-tahmin"
-        }
+        # Normalize et (toplam 1 olsun)
+        total = p1 + px + p2
+        p1 /= total; px /= total; p2 /= total
+        margin = 1.08
+        o1_calc = round(1 / p1 / margin, 2)
+        ox_calc = round(1 / px / margin, 2)
+        o2_calc = round(1 / p2 / margin, 2)
+        # Mantıklı aralık kontrolü
+        if 1.05 <= o1_calc <= 20 and 1.05 <= ox_calc <= 20 and 1.05 <= o2_calc <= 20:
+            return {
+                "o1": o1_calc, "ox": ox_calc, "o2": o2_calc,
+                "o25_ov": None, "o25_un": None,
+                "source": "model-tahmin"
+            }
     except:
-        return None
+        pass
+    return None
 
 def analyze_odds(o1, ox, o2, model_stats, h_name, a_name):
     """
@@ -1577,14 +1602,28 @@ def odds_to_prompt_segment(oa, h, a):
             f"RİSK:{oa['risk_level']} | {bv_str} | SİNYAL:{sigs}")
 
 def render_odds_panel(oa, h, a, model_stats):
-    """Odds panelini Streamlit'e render et — render_vs_ui içinde çağrılır."""
+    """Odds panelini Streamlit'e render et — kaynak uyarısı ile."""
     if not oa:
         return
 
     imp   = oa["imp"]
     mono  = "JetBrains Mono,monospace"
-    risk_color = {"DÜŞÜK":"#34d399","ORTA-DÜŞÜK":"#86efac","ORTA":"#fbbf24",
-                  "YÜKSEK":"#f87171","BİLİNMİYOR":"#6b7280"}.get(oa["risk_level"],"#6b7280")
+    _src  = oa.get("_source", "")
+    _is_est = "groq" in _src.lower() or "model" in _src.lower()
+
+    # Kaynak banner
+    if _is_est:
+        st.warning(f"⚠️ **Gerçek oran bulunamadı.** Bu oranlar Poisson model/AI tahminidir (`{_src}`). "
+                   f"Doğru analiz için API-Football key girin veya manuel oran girin.")
+    elif "Bet365" in _src:
+        st.success(f"✅ Oranlar: **Bet365** ({_src})")
+    elif "football-data" in _src:
+        st.info(f"📊 Oranlar: **football-data.co.uk** ({_src})")
+    elif _src == "manuel":
+        st.info("✏️ Oranlar: **Manuel girildi**")
+
+    risk_color = {"DÜŞÜK":"#3ecf7a","ORTA-DÜŞÜK":"#86efac","ORTA":"#f5a623",
+                  "YÜKSEK":"#f87171","BİLİNMİYOR":"#4a6880"}.get(oa["risk_level"],"#4a6880")
 
     def oran_box(label, odd, model_pct, imp_pct, val_obj, bg, border, color):
         edge_html = ""
@@ -2782,17 +2821,17 @@ if st.session_state.matches:
         _d_oa = st.session_state.mdata.get(mid,{}).get("odds_analysis")
         if _d_oa:
             _src = _d_oa.get("_source","")
-            _src_icon = ("🟢" if "football-data" in _src
-                        else "🤖" if "groq" in _src or "model" in _src
-                        else "🔵" if _src=="manuel"
-                        else "📊")
-            _src_label = ("fdco.uk" if "football-data" in _src
-                         else "Groq tahmini" if "groq" in _src
-                         else "Model tahmini" if "model" in _src
-                         else "Manuel" if _src=="manuel"
-                         else _src)
-            _odds_chip = f" · {_src_icon} 1:{_d_oa['o1']} X:{_d_oa['ox']} 2:{_d_oa['o2']} ({_src_label})"
-        with st.expander(f"{'✅' if done else '🔴'}  {hn}  vs  {an}  ·  {utc[11:16]}{_odds_chip}"):
+            _is_real  = "Bet365" in _src or "football-data" in _src or _src == "manuel"
+            _is_est   = "groq" in _src.lower() or "model" in _src.lower()
+            _src_icon = ("🟢" if "Bet365" in _src
+                        else "📊" if "football-data" in _src
+                        else "✏️" if _src == "manuel"
+                        else "⚠️")  # tahmin
+            _src_label = (_src if _is_real
+                          else "TAHMİN — gerçek oran yok")
+            _chip_color = "#3ecf7a" if "Bet365" in _src else "#f5a623" if _is_est else "#4c9eff"
+            _odds_chip = f' · {_src_icon} <span style="color:{_chip_color}">1:{_d_oa["o1"]} X:{_d_oa["ox"]} 2:{_d_oa["o2"]}</span> <span style="color:#4a6880;font-size:.7em">({_src_label})</span>'
+        with st.expander(f"{'✅' if done else '🔴'}  {hn}  vs  {an}  ·  {utc[11:16]}"):
             if d:
                 hxg = d.get("hxg",0); axg = d.get("axg",0)
                 hf  = d.get("hf",{});  af  = d.get("af",{})
@@ -2801,15 +2840,22 @@ if st.session_state.matches:
                 pd_ = d.get("pattern_data")
 
                 # ── Özet satırı ──────────────────────────────
-                odds_txt = (f' &nbsp;·&nbsp; <b style="color:#fbbf24">1:{oa["o1"]} X:{oa["ox"]} 2:{oa["o2"]}</b>'
-                            if oa else ' &nbsp;·&nbsp; <span style="color:#1a3050">Oran çekilemedi</span>')
+                if oa:
+                    _src      = oa.get("_source","")
+                    _is_est   = "groq" in _src.lower() or "model" in _src.lower()
+                    _src_icon = "🟢 Bet365" if "Bet365" in _src else ("📊 fdco.uk" if "football-data" in _src else ("✏️ Manuel" if _src=="manuel" else "⚠️ TAHMİN"))
+                    _warn_txt = ' <span style="color:#f5a623;font-weight:700">⚠️ Gerçek oran yok — bu oranlar model tahminidir</span>' if _is_est else ''
+                    odds_txt = (f' &nbsp;·&nbsp; <b style="color:#f5a623">1:{oa["o1"]} X:{oa["ox"]} 2:{oa["o2"]}</b>'
+                                f' <span style="color:#4a6880;font-size:.85em">({_src_icon})</span>{_warn_txt}')
+                else:
+                    odds_txt = ' &nbsp;·&nbsp; <span style="color:#4a6880">Oran çekilemedi</span>'
                 st.markdown(
-                    f'<span style="font-size:.75rem;color:#2a4060">'
-                    f'xG: <b style="color:#60a5fa">{hxg}</b>–<b style="color:#f87171">{axg}</b>'
-                    f' &nbsp;·&nbsp; {hn}: <b style="color:#c0cfe0">{hf.get("form_str","?") if hf else "?"}</b>'
-                    f' &nbsp;·&nbsp; {an}: <b style="color:#c0cfe0">{af.get("form_str","?") if af else "?"}</b>'
+                    f'<div style="font-size:.75rem;color:#4a6880;padding:6px 0;border-bottom:1px solid #1c2e44;margin-bottom:8px">'
+                    f'xG: <b style="color:#4c9eff">{hxg}</b>–<b style="color:#ff7070">{axg}</b>'
+                    f' &nbsp;·&nbsp; {hn}: <b style="color:#a8c4d8">{hf.get("form_str","?") if hf else "?"}</b>'
+                    f' &nbsp;·&nbsp; {an}: <b style="color:#a8c4d8">{af.get("form_str","?") if af else "?"}</b>'
                     f' &nbsp;·&nbsp; H2H: {h2.get("hw",0)}G-{h2.get("dr",0)}B-{h2.get("aw",0)}M'
-                    f'{odds_txt}</span>', unsafe_allow_html=True)
+                    f'{odds_txt}</div>', unsafe_allow_html=True)
 
                 # ── Oran Paneli — analiz beklenmez ───────────
                 if oa:
