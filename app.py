@@ -18,7 +18,7 @@ def _safe_minute(val, default=45):
 def calc_live_minute(m):
     """
     football-data.org maç nesnesinden gerçek oyun dakikasını hesapla.
-    utcDate her zaman UTC'dir ("2025-03-22T20:00:00Z" formatında).
+    utcDate UTC'dir. Devre arası ~15dk. Stopaj hesaba katılmaz.
     """
     import datetime as _dt
 
@@ -31,26 +31,21 @@ def calc_live_minute(m):
         return 45
 
     try:
-        # "2025-03-22T20:00:00Z" → Z suffix'ini temizle
         clean = utc_str.rstrip("Z").replace("T", " ")[:19]
         start = _dt.datetime.strptime(clean, "%Y-%m-%d %H:%M:%S")
     except Exception:
         return 45
 
-    # datetime.utcnow() UTC döndürür — utcDate de UTC — doğru karşılaştırma
     now     = _dt.datetime.utcnow()
     elapsed = max(0, int((now - start).total_seconds() / 60))
 
-    # 1Y devam
-    if elapsed <= 46:
-        return max(1, min(46, elapsed))
-    # Devre arası (~45dk + ~17dk)
-    elif elapsed <= 63:
-        return 45
-    # 2Y: devre arasını (~17dk) çıkar
+    if elapsed <= 45:
+        return max(1, elapsed)          # 1Y: 1–45
+    elif elapsed <= 60:
+        return 45                       # Devre arası (45+15dk)
     else:
-        minute = elapsed - 17
-        return max(46, min(95, minute))
+        minute = elapsed - 15           # 2Y: devre arası 15dk
+        return max(46, min(90, minute))
 
 
 from datetime import date
@@ -2917,13 +2912,33 @@ def render_live_match(m, live_stats, lp, analysis_text, hf, af, h2h):
     )
 
     # ── SKOR KARTI ───────────────────────────────────────────────
+    # football-data.org goals array: [{minute, team:{id}, scorer:{name}, assist:{name}}]
     events_h = events_a = ""
+    home_id = m.get("homeTeam",{}).get("id")
     for ev in m.get("goals", []):
-        t  = ev.get("team",{}).get("id")
-        sc = ev.get("scorer",{}).get("name","?").split()[-1]
-        mi = ev.get("minute","?")
-        if t == m["homeTeam"]["id"]: events_h += f"⚽ {sc} {mi}' "
-        else:                        events_a += f"⚽ {sc} {mi}' "
+        team_id = ev.get("team",{}).get("id")
+        scorer  = ev.get("scorer",{}).get("name") or ev.get("scorer",{}).get("shortName","?")
+        # Soyad al (son kelime)
+        scorer_short = scorer.split()[-1] if scorer else "?"
+        mi      = ev.get("minute","?")
+        inj     = ev.get("injuryTime")
+        mi_str  = f"{mi}+{inj}" if inj else str(mi)
+        line    = f"⚽ {scorer_short} {mi_str}' "
+        if team_id == home_id:
+            events_h += line
+        else:
+            events_a += line
+    
+    # Skor doğrulaması: goal sayısı skora eşit değilse
+    # (API bazen goals listesini geç güncelliyor) skoru göster ama golü boş bırak
+    goal_h_count = sum(1 for ev in m.get("goals",[]) if ev.get("team",{}).get("id") == home_id)
+    goal_a_count = len(m.get("goals",[])) - goal_h_count
+    if goal_h_count != h_sc or goal_a_count != a_sc:
+        # Skorla uyumsuz — isim yerine sadece sayı göster
+        if h_sc > 0 and not events_h:
+            events_h = "⚽ " * h_sc
+        if a_sc > 0 and not events_a:
+            events_a = "⚽ " * a_sc
 
     st.markdown(f"""
 <div class="live-score-wrap">
@@ -3284,8 +3299,19 @@ def auto_best_bet(lp, h_name, a_name, h_score, a_score, hf=None, af=None, league
 
     if not cands:
         return None
-    best = max(cands, key=lambda x: (x["prob"], -x["priority"]))
-    return best
+
+    # %95+ olanlar zaten gerçekleşmiş → anlamsız, filtrele
+    # %50 altı çok belirsiz → filtrele
+    meaningful = [c for c in cands if 52 <= c["prob"] <= 94]
+    if not meaningful:
+        # Hepsi filtrelendiyse en yüksek problu non-99'u al
+        meaningful = [c for c in cands if c["prob"] < 99]
+    if not meaningful:
+        return None
+
+    # Olasılığa göre sırala (önce yüksek prob, eşitse düşük priority)
+    meaningful.sort(key=lambda x: (-x["prob"], x["priority"]))
+    return meaningful[0]
 
 
 
@@ -4114,18 +4140,18 @@ padding:2rem;text-align:center;color:#4a6880;font-size:.82rem">
             lstat_ = parse_live_stats(ss_raw_)
             lc_    = live_league if live_league != "Tüm Ligler" else None
             lp_    = calc_live_goal_probability(lstat_, min_, lhsc_, lasc_, ld["hf"], ld["af"], league_code=lc_)
-            pick_  = auto_best_bet(lp_, lm_["homeTeam"]["name"], lm_["awayTeam"]["name"],
-                                   lhsc_, lasc_, ld["hf"], ld["af"], league_code=lc_)
-            if pick_:
+            match_bets = _get_all_bets(lp_, lm_["homeTeam"]["name"], lm_["awayTeam"]["name"],
+                                        lhsc_, lasc_, ld["hf"], ld["af"], league_code=lc_)
+            for bp in match_bets[:2]:  # Her maçtan max 2 tavsiye
                 all_picks.append({
                     "lid": lid, "lm": lm_, "lp": lp_,
                     "match": f"{lm_['homeTeam']['name']} vs {lm_['awayTeam']['name']}",
                     "score": f"{lhsc_}–{lasc_}",
                     "minute": min_,
-                    **pick_
+                    **bp
                 })
 
-        all_picks.sort(key=lambda x: x["prob"], reverse=True)
+        all_picks.sort(key=lambda x: (-x["prob"], x["priority"]))
         top_pick = all_picks[0] if all_picks else None
 
         if top_pick:
@@ -4221,7 +4247,34 @@ padding:1rem 1.2rem;margin-bottom:1rem">
   </div>
 </div>""", unsafe_allow_html=True)
                             display_pick = None  # İkisi zaten gösterildi
-                    if display_pick:
+                    # Tüm anlamlı pazarları hesapla ve sıralı göster
+                    lc_tmp2 = live_league if live_league != "Tüm Ligler" else None
+                    all_auto = _get_all_bets(lp, lhn, lan, lhsc, lasc, ld["hf"], ld["af"], league_code=lc_tmp2)
+                    if all_auto:
+                        rows_html = ""
+                        for bp in all_auto[:5]:
+                            pc = bp["prob"]
+                            pcolor = "#3ecf7a" if pc >= 72 else ("#f5a623" if pc >= 58 else "#a8c4d8")
+                            rows_html += (
+                                f'<div style="display:flex;align-items:center;gap:8px;'
+                                f'padding:5px 0;border-bottom:1px solid #1c2e44">'
+                                f'<div style="font-size:.82rem;font-weight:700;color:#d0dce8;'
+                                f'font-family:JetBrains Mono,monospace;flex:1">{bp["market"]}</div>'
+                                f'<div style="font-size:.66rem;color:#4a6880;flex:2">{bp.get("why","")}</div>'
+                                f'<div style="background:{pcolor};color:#04180a;font-size:.72rem;'
+                                f'font-weight:800;padding:3px 10px;border-radius:4px;white-space:nowrap">'
+                                f'%{pc:.0f}</div></div>'
+                            )
+                        st.markdown(
+                            f'<div style="background:#09101e;border:1px solid #1c2e44;'
+                            f'border-radius:8px;padding:.7rem 1rem;margin-bottom:.6rem">'
+                            f'<div style="font-size:.54rem;font-weight:700;letter-spacing:.12em;'
+                            f'text-transform:uppercase;color:#4a6880;margin-bottom:6px">'
+                            f'🎯 Tavsiyeler — Olasılığa Göre</div>'
+                            + rows_html + '</div>',
+                            unsafe_allow_html=True
+                        )
+                    elif display_pick:
                         st.markdown(f"""
 <div style="background:#04180a;border:1px solid #3ecf7a;border-radius:8px;
 padding:.6rem 1rem;margin-bottom:.6rem;display:flex;align-items:center;gap:10px">
