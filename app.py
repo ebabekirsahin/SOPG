@@ -1449,25 +1449,6 @@ def render_vs_ui(match, hf, af, h2h, hxg, axg, h_htxg, a_htxg,
   </div>
 """, unsafe_allow_html=True)
 
-    # ── 2b. ODDS PANEL ────────────────────────────────────────
-    render_odds_panel(odds_analysis, h, a, stats)
-
-    # ── 2c. PATTERN PANEL — otomatik pattern_data varsa göster ─
-    # pattern_data mdata içinden gelir (fetch sırasında hesaplandı)
-    _pattern = None
-    for _mid, _d in st.session_state.get("mdata",{}).items():
-        if _d.get("match",{}).get("id") == match.get("id"):
-            _pattern = _d.get("pattern_data")
-            break
-    if _pattern and odds_analysis:
-        render_pattern_panel(
-            _pattern,
-            odds_analysis.get("o1",0),
-            odds_analysis.get("ox",0),
-            odds_analysis.get("o2",0),
-            h, a
-        )
-
     # ── 3. PUAN DURUMU VS ────────────────────────────────────
     def better(hv, av, higher_is_better=True):
         if hv == av: hc, ac = "equal","equal"
@@ -2213,41 +2194,59 @@ if st.session_state.matches:
         if _d_oa:
             _odds_chip = f" · 1:{_d_oa['o1']} X:{_d_oa['ox']} 2:{_d_oa['o2']}"
         with st.expander(f"{'✅' if done else '🔴'}  {hn}  vs  {an}  ·  {utc[11:16]}{_odds_chip}"):
-            if d and not done:
-                hxg=d.get("hxg",0); axg=d.get("axg",0)
-                hf=d.get("hf",{}); af=d.get("af",{})
-                h2=d.get("h2h",{})
+            if d:
+                hxg = d.get("hxg",0); axg = d.get("axg",0)
+                hf  = d.get("hf",{});  af  = d.get("af",{})
+                h2  = d.get("h2h",{})
+                oa  = d.get("odds_analysis")
+                pd_ = d.get("pattern_data")
+
+                # ── Özet satırı ──────────────────────────────
+                odds_txt = (f' &nbsp;·&nbsp; <b style="color:#fbbf24">1:{oa["o1"]} X:{oa["ox"]} 2:{oa["o2"]}</b>'
+                            if oa else ' &nbsp;·&nbsp; <span style="color:#1a3050">Oran çekilemedi</span>')
                 st.markdown(
                     f'<span style="font-size:.75rem;color:#2a4060">'
-                    f'xG: <b style="color:#60a5fa">{hxg}</b> – <b style="color:#f87171">{axg}</b> &nbsp;·&nbsp; '
-                    f'{hn}: <b style="color:#c0cfe0">{hf.get("form_str","?") if hf else "?"}</b> &nbsp;·&nbsp; '
-                    f'{an}: <b style="color:#c0cfe0">{af.get("form_str","?") if af else "?"}</b> &nbsp;·&nbsp; '
-                    f'H2H: {h2.get("hw",0)}G-{h2.get("dr",0)}B-{h2.get("aw",0)}M'
-                    f'</span>', unsafe_allow_html=True)
-                if st.button("🤖 Analiz Et", key=f"btn_{mid}", type="primary"):
-                    with st.spinner(f"🦙 Groq: {hn}–{an}..."):
-                        st.session_state.analyses[mid]=groq_call(d["prompt"])
-                    st.rerun()
-            elif done and d:
-                try:
-                    render_vs_ui(
-                        d["match"],d["hf"],d["af"],d["h2h"],
-                        d["hxg"],d["axg"],d["h_htxg"],d["a_htxg"],
-                        d["stats"],d["top_ms"],d["top_ht"],
-                        d["h_stand"],d["a_stand"],d["h_sc"],d["a_sc"],
-                        st.session_state.analyses[mid],
-                        odds_analysis=d.get("odds_analysis"),
-                    )
-                except Exception as _e:
-                    st.error(f"UI render hatası: {_e}")
-                    # Fallback: ham analiz metnini göster
-                    st.markdown(
-                        f'<div style="background:#060d1c;border:1px solid #1a2e4a;border-radius:10px;'
-                        f'padding:1.2rem;font-size:.83rem;color:#c0cfe0;white-space:pre-wrap;'
-                        f'max-height:600px;overflow-y:auto;font-family:monospace">'
-                        f'{st.session_state.analyses[mid]}</div>',
-                        unsafe_allow_html=True
-                    )
+                    f'xG: <b style="color:#60a5fa">{hxg}</b>–<b style="color:#f87171">{axg}</b>'
+                    f' &nbsp;·&nbsp; {hn}: <b style="color:#c0cfe0">{hf.get("form_str","?") if hf else "?"}</b>'
+                    f' &nbsp;·&nbsp; {an}: <b style="color:#c0cfe0">{af.get("form_str","?") if af else "?"}</b>'
+                    f' &nbsp;·&nbsp; H2H: {h2.get("hw",0)}G-{h2.get("dr",0)}B-{h2.get("aw",0)}M'
+                    f'{odds_txt}</span>', unsafe_allow_html=True)
+
+                # ── Oran Paneli — analiz beklenmez ───────────
+                if oa:
+                    render_odds_panel(oa, hn, an, d.get("stats",{}))
+
+                # ── Pattern Paneli — analiz beklenmez ────────
+                if pd_ and oa:
+                    render_pattern_panel(pd_, oa.get("o1",0), oa.get("ox",0), oa.get("o2",0), hn, an)
+                elif not oa:
+                    st.info("💡 Oran verisi bulunamadı. Lig fixtures.csv'de bu maç yoksa sonraki hafta güncellenir.")
+
+                # ── Analiz butonu veya tam VS UI ─────────────
+                if not done:
+                    if st.button("🤖 Analiz Et", key=f"btn_{mid}", type="primary"):
+                        with st.spinner(f"🦙 Groq: {hn}–{an}..."):
+                            st.session_state.analyses[mid] = groq_call(d["prompt"])
+                        st.rerun()
+                else:
+                    try:
+                        render_vs_ui(
+                            d["match"],d["hf"],d["af"],d["h2h"],
+                            d["hxg"],d["axg"],d["h_htxg"],d["a_htxg"],
+                            d["stats"],d["top_ms"],d["top_ht"],
+                            d["h_stand"],d["a_stand"],d["h_sc"],d["a_sc"],
+                            st.session_state.analyses[mid],
+                            odds_analysis=oa,
+                        )
+                    except Exception as _e:
+                        st.error(f"UI render hatası: {_e}")
+                        st.markdown(
+                            f'<div style="background:#060d1c;border:1px solid #1a2e4a;border-radius:10px;'
+                            f'padding:1.2rem;font-size:.83rem;color:#c0cfe0;white-space:pre-wrap;'
+                            f'max-height:600px;overflow-y:auto;font-family:monospace">'
+                            f'{st.session_state.analyses[mid]}</div>',
+                            unsafe_allow_html=True
+                        )
 else:
     st.markdown("""
 <div style="background:#0a1628;border:1px solid #0f2a45;border-radius:14px;padding:1.5rem 1.8rem">
