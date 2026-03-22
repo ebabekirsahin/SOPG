@@ -1109,6 +1109,76 @@ def odds_deviation(sources):
     if len(valid) < 2: return None
     return round(max(valid) - min(valid), 3)
 
+
+# ── GROQ İLE OTOMATİK ORAN TAHMİNİ ─────────────────────────────
+def estimate_odds_with_groq(h, a, stats, hf, af, h2h, h_stand, a_stand):
+    """
+    Groq Llama'ya bu maç için tahmini piyasa oranlarını sor.
+    xG modeli + form verisinden gerçekçi oran tahmini üretir.
+    Harici API gerekmez.
+    """
+    fv = lambda d,k,dv=0: d.get(k,dv) if d else dv
+    hs = h_stand or {}; as_ = a_stand or {}
+
+    mini_prompt = f"""Profesyonel futbol bahis analisti.
+Aşağıdaki verilere bakarak bu maç için SADECE piyasa oranı tahmin et.
+Başka hiçbir şey yazma — sadece 3 sayı.
+
+MAÇ: {h}(Ev) vs {a}(Dep)
+Model MS: 1=%{stats['p1']} X=%{stats['px']} 2=%{stats['p2']}
+xG: Ev={round(stats.get('p1',50)/100*2.5,2)} Dep={round(stats.get('p2',25)/100*4,2)}
+{h} Form: {fv(hf,'form_str','?')} {fv(hf,'pts5',0)}/15 | Gol ort: {fv(hf,'avg_gf',1.2)}
+{a} Form: {fv(af,'form_str','?')} {fv(af,'pts5',0)}/15 | Gol ort: {fv(af,'avg_gf',1.0)}
+Sıra: {h}={hs.get('position','?')} {a}={as_.get('position','?')}
+
+Cevap formatı (sadece bu 3 satır, başka hiçbir şey):
+1: [oran]
+X: [oran]
+2: [oran]"""
+
+    try:
+        r = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
+            json={"model": "llama-3.1-8b-instant",
+                  "messages": [{"role": "user", "content": mini_prompt}],
+                  "temperature": 0.1, "max_tokens": 60},
+            timeout=30
+        )
+        r.raise_for_status()
+        text = r.json()["choices"][0]["message"]["content"].strip()
+        import re
+        o1_m = re.search(r"1:[\s]*([0-9.]+)", text)
+        ox_m = re.search(r"X:[\s]*([0-9.]+)", text)
+        o2_m = re.search(r"2:[\s]*([0-9.]+)", text)
+        if o1_m and ox_m and o2_m:
+            o1 = round(float(o1_m.group(1)), 2)
+            ox = round(float(ox_m.group(1)), 2)
+            o2 = round(float(o2_m.group(1)), 2)
+            # Makulluk kontrolü
+            if 1.05 <= o1 <= 20 and 1.05 <= ox <= 20 and 1.05 <= o2 <= 20:
+                return {"o1": o1, "ox": ox, "o2": o2,
+                        "o25_ov": None, "o25_un": None,
+                        "source": "groq-tahmin"}
+    except:
+        pass
+
+    # Fallback: Poisson olasılıklarından basit oran hesapla
+    try:
+        p1 = max(5, stats["p1"]) / 100
+        px = max(5, stats["px"]) / 100
+        p2 = max(5, stats["p2"]) / 100
+        margin = 1.08  # %8 bookmaker marjı
+        return {
+            "o1": round(1 / p1 / margin, 2),
+            "ox": round(1 / px / margin, 2),
+            "o2": round(1 / p2 / margin, 2),
+            "o25_ov": None, "o25_un": None,
+            "source": "model-tahmin"
+        }
+    except:
+        return None
+
 def analyze_odds(o1, ox, o2, model_stats, h_name, a_name):
     """
     Ana odds analiz fonksiyonu — mevcut model istatistikleriyle karşılaştır.
@@ -2229,6 +2299,12 @@ if fetch_btn:
         elif use_manual_odds and manual_o1:
             oa = analyze_odds(manual_o1, manual_ox, manual_o2, stats, hn, an)
             oa["_source"] = "manuel"
+        else:
+            # Hiçbir oran kaynağı bulunamadı → Groq ile tahmin et
+            est = estimate_odds_with_groq(hn, an, stats, hf, af, h2h, h_s, a_s)
+            if est:
+                oa = analyze_odds(est["o1"], est["ox"], est["o2"], stats, hn, an)
+                oa["_source"] = est["source"]
 
         # ── Pattern arama (otomatik) ─────────────────────────
         pattern_data = None
@@ -2287,8 +2363,16 @@ if st.session_state.matches:
         _d_oa = st.session_state.mdata.get(mid,{}).get("odds_analysis")
         if _d_oa:
             _src = _d_oa.get("_source","")
-            _src_icon = "🟢" if "odds-api" in _src else "🟡" if "football-data" in _src else "🔵" if _src=="manuel" else ""
-            _odds_chip = f" · {_src_icon} 1:{_d_oa['o1']} X:{_d_oa['ox']} 2:{_d_oa['o2']}"
+            _src_icon = ("🟢" if "football-data" in _src
+                        else "🤖" if "groq" in _src or "model" in _src
+                        else "🔵" if _src=="manuel"
+                        else "📊")
+            _src_label = ("fdco.uk" if "football-data" in _src
+                         else "Groq tahmini" if "groq" in _src
+                         else "Model tahmini" if "model" in _src
+                         else "Manuel" if _src=="manuel"
+                         else _src)
+            _odds_chip = f" · {_src_icon} 1:{_d_oa['o1']} X:{_d_oa['ox']} 2:{_d_oa['o2']} ({_src_label})"
         with st.expander(f"{'✅' if done else '🔴'}  {hn}  vs  {an}  ·  {utc[11:16]}{_odds_chip}"):
             if d:
                 hxg = d.get("hxg",0); axg = d.get("axg",0)
