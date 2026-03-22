@@ -2232,10 +2232,11 @@ if fetch_btn:
 
         # ── Pattern arama (otomatik) ─────────────────────────
         pattern_data = None
-        if couk_code and oa:
+        _couk = FD_ORG_TO_COUK.get(sel_code)
+        if _couk and oa:
             o1_v = oa["o1"]; ox_v = oa["ox"]; o2_v = oa["o2"]
             pattern_data, total_rows = auto_pattern_search(
-                couk_code, o1_v, ox_v, o2_v,
+                _couk, o1_v, ox_v, o2_v,
                 n_seasons=n_seasons, tol=tolerance
             )
 
