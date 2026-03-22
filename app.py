@@ -745,11 +745,23 @@ def get_af_fixture_id(af_key, league_id, match_date, home_name, away_name):
     """
     API-Football'dan fixture ID bul — fuzzy team name matching ile.
     """
+    # Season: 2025-26 sezonu için "2025", 2024-25 için "2024"
+    year = int(match_date[:4])
+    month = int(match_date[5:7])
+    season_year = year if month >= 7 else year - 1
+
     fixtures = af_get("fixtures", {
         "league": league_id,
         "date":   match_date,
-        "season": 2025 if int(match_date[:4]) >= 2025 else 2024,
+        "season": season_year,
     }, af_key)
+
+    if debug:
+        st.caption(f"🐛 AF fixtures league={league_id} date={match_date} season={season_year} → {len(fixtures)} maç")
+        for fx in fixtures[:3]:
+            h_n = fx.get("teams",{}).get("home",{}).get("name","?")
+            a_n = fx.get("teams",{}).get("away",{}).get("name","?")
+            st.caption(f"🐛   {h_n} vs {a_n}")
 
     for f in fixtures:
         h = f.get("teams",{}).get("home",{}).get("name","")
@@ -760,48 +772,57 @@ def get_af_fixture_id(af_key, league_id, match_date, home_name, away_name):
 
 def get_af_odds(af_key, fixture_id):
     """
-    API-Football'dan maç oranlarını çek.
-    Bet ID 1 = Match Winner (1X2), Bet ID 5 = Goals Over/Under
+    API-Football /odds endpoint — tek çağrıda tüm bet türlerini çek.
+    Response: [{fixture, update, bookmakers:[{id,name,bets:[{id,name,values:[{value,odd}]}]}]}]
     """
-    # 1X2 oranları
-    odds_data = af_get("odds", {
-        "fixture":   fixture_id,
-        "bookmaker": 1,  # Bet365
-        "bet":       1,  # Match Winner
-    }, af_key)
+    # Tek çağrıda tüm marketi çek (bet parametresi vermezsen hepsi gelir)
+    odds_data = af_get("odds", {"fixture": fixture_id}, af_key)
 
-    o1 = ox = o2 = None
+    if debug:
+        st.caption(f"🐛 AF /odds fixture={fixture_id} → {len(odds_data)} item")
+
+    o1 = ox = o2 = o25_ov = o25_un = None
+
     for item in odds_data:
         for bm in item.get("bookmakers", []):
+            bm_name = bm.get("name", "")
             for bet in bm.get("bets", []):
-                if bet.get("id") == 1:  # Match Winner
+                bet_name = bet.get("name", "").lower()
+                bet_id   = bet.get("id", 0)
+
+                # Match Winner (1X2) — bet id 1 veya isim kontrolü
+                if (bet_id == 1 or "match winner" in bet_name) and o1 is None:
                     for v in bet.get("values", []):
-                        if v.get("value") == "Home": o1 = _safe_float(v.get("odd"))
-                        elif v.get("value") == "Draw": ox = _safe_float(v.get("odd"))
-                        elif v.get("value") == "Away": o2 = _safe_float(v.get("odd"))
+                        val = v.get("value", "")
+                        odd = _safe_float(v.get("odd"))
+                        if val in ("Home", "1"):    o1 = odd
+                        elif val in ("Draw", "X"):  ox = odd
+                        elif val in ("Away", "2"):  o2 = odd
+                    if debug and o1:
+                        st.caption(f"🐛 Oran bulundu [{bm_name}]: 1={o1} X={ox} 2={o2}")
+
+                # Goals Over/Under — bet id 5 veya isim kontrolü
+                if (bet_id == 5 or "goals over/under" in bet_name) and o25_ov is None:
+                    for v in bet.get("values", []):
+                        val = v.get("value", "")
+                        odd = _safe_float(v.get("odd"))
+                        if "over" in val.lower() and "2.5" in val: o25_ov = odd
+                        elif "under" in val.lower() and "2.5" in val: o25_un = odd
+
+            # İlk bookmaker yeterli ama Bet365 varsa onu tercih et
+            if o1 and ox and o2 and "Bet365" in bm_name:
+                break
+        if o1 and ox and o2:
+            break
 
     if not (o1 and ox and o2):
+        if debug: st.caption(f"🐛 AF odds bulunamadı fixture_id={fixture_id}")
         return None
 
-    # Over/Under 2.5
-    ou_data = af_get("odds", {
-        "fixture":   fixture_id,
-        "bookmaker": 1,
-        "bet":       5,  # Goals Over/Under
-    }, af_key)
-
-    o25_ov = o25_un = None
-    for item in ou_data:
-        for bm in item.get("bookmakers", []):
-            for bet in bm.get("bets", []):
-                if bet.get("id") == 5:
-                    for v in bet.get("values", []):
-                        if v.get("value") == "Over 2.5":  o25_ov = _safe_float(v.get("odd"))
-                        elif v.get("value") == "Under 2.5": o25_un = _safe_float(v.get("odd"))
-
     return {
-        "o1": o1, "ox": ox, "o2": o2,
-        "o25_ov": o25_ov, "o25_un": o25_un,
+        "o1": round(o1,2), "ox": round(ox,2), "o2": round(o2,2),
+        "o25_ov": round(o25_ov,2) if o25_ov else None,
+        "o25_un": round(o25_un,2) if o25_un else None,
         "source": "api-football.com"
     }
 
@@ -1163,11 +1184,18 @@ def render_pattern_panel(pattern, o1, ox, o2, h, a):
         f'<div style="font-size:.6rem;color:#3a5570;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px">MS SONUÇLARI</div>'
         f'<div style="display:flex;gap:6px">'
         + "".join(
-            f'<div style="flex:1;text-align:center;background:{"#061d0f" if k=="1" else "#140e00" if k=="X" else "#1a0505"};'
-            f'border:1px solid {"#1d4ed8" if k=="1" else "#854d0e" if k=="X" else "#991b1b"};border-radius:6px;padding:6px">'
-            f'<div style="font-size:.65rem;color:#3a5570">{{"1":h[:10],"X":"Berab.","2":a[:10]}}["{k}"]</div>'
-            f'<div style="font-size:1.2rem;font-weight:800;color:{"#60a5fa" if k=="1" else "#fbbf24" if k=="X" else "#f87171"};font-family:{mono}">%{v}</div>'
-            f'</div>'
+            (lambda lbl, bg, bd, fc:
+                f'<div style="flex:1;text-align:center;background:{bg};'
+                f'border:1px solid {bd};border-radius:6px;padding:6px">'
+                f'<div style="font-size:.65rem;color:#3a5570">{lbl}</div>'
+                f'<div style="font-size:1.2rem;font-weight:800;color:{fc};font-family:{mono}">%{v}</div>'
+                f'</div>'
+            )(
+                h[:10] if k=="1" else ("Berab." if k=="X" else a[:10]),
+                "#061d0f" if k=="1" else ("#140e00" if k=="X" else "#1a0505"),
+                "#1d4ed8" if k=="1" else ("#854d0e" if k=="X" else "#991b1b"),
+                "#60a5fa" if k=="1" else ("#fbbf24" if k=="X" else "#f87171"),
+            )
             for k, v in [("1", res.get("1",0)), ("X", res.get("X",0)), ("2", res.get("2",0))]
         )
         + f'</div></div>'
