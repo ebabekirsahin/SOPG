@@ -20,237 +20,280 @@ st.markdown("""
 *{box-sizing:border-box}
 html,body,[class*="css"]{font-family:'Inter',sans-serif}
 
+/* ── RENK SİSTEMİ ──────────────────────────────────────
+  Arka plan L1:  #09101e   (en koyu — card içi)
+  Arka plan L2:  #0d1829   (panel zemin)
+  Arka plan L3:  #111f35   (hover, alt element)
+  Bölücü:        #1c2e44
+  Etiket soluk:  #2a3a4a → #4a6880
+  Etiket orta:   #7a9ab8
+  Ana metin:     #a8c4d8 → #d0dce8
+  Ev (mavi):     #4c9eff
+  Dep (kırmızı): #ff7070
+  Beraberlik:    #f5a623
+  İyi/Pozitif:   #3ecf7a
+  Kötü/Negatif:  #f87171
+  Vurgu:         #00e5a0
+  Dönüş:         #fbbf24
+──────────────────────────────────────────────────── */
+
 /* ── HERO ── */
 .hero{
-  background:linear-gradient(160deg,#05080f 0%,#0a1628 60%,#071420 100%);
-  border:1px solid #0f2a45;border-radius:20px;padding:2rem 2.5rem;
-  margin-bottom:1.5rem;text-align:center;position:relative;overflow:hidden
+  background:linear-gradient(160deg,#06090f 0%,#0d1829 100%);
+  border:1px solid #1c2e44;border-radius:14px;padding:1.6rem 2rem;
+  margin-bottom:1.2rem;text-align:center;position:relative;overflow:hidden
 }
-.hero::before{content:'';position:absolute;top:-60px;left:50%;transform:translateX(-50%);
-width:300px;height:300px;background:radial-gradient(circle,#00e5a015 0%,transparent 70%)}
-.hero h1{color:#fff;margin:0;font-size:2rem;font-weight:800;letter-spacing:-1.5px}
+.hero h1{color:#d0dce8;margin:0;font-size:1.7rem;font-weight:800;letter-spacing:-.8px}
 .hero h1 span{color:#00e5a0}
-.hero p{color:#3a5570;margin:.5rem 0 0;font-size:.82rem}
+.hero p{color:#4a6880;margin:.4rem 0 0;font-size:.78rem}
 
-/* ── VS KART (Ana karşılaştırma bloğu) ── */
-.vs-wrapper{
-  background:linear-gradient(160deg,#060d1c 0%,#0a1628 100%);
-  border:1px solid #0f2a45;border-radius:20px;overflow:hidden;margin-bottom:1.2rem
-}
+/* ── VS WRAPPER ── */
+.vs-wrapper{background:#0d1829;border:1px solid #1c2e44;border-radius:14px;overflow:hidden;margin-bottom:1rem}
 .vs-header{
-  display:grid;grid-template-columns:1fr auto 1fr;
-  align-items:center;padding:1.4rem 1.8rem;
-  background:linear-gradient(90deg,#071628 0%,#040b14 50%,#071628 100%);
-  border-bottom:1px solid #0f2a45;gap:1rem
+  display:grid;grid-template-columns:1fr auto 1fr;align-items:center;
+  padding:1.1rem 1.5rem;background:#09101e;border-bottom:1px solid #1c2e44;gap:1rem
 }
 .vs-team{text-align:center}
-.vs-team .t-name{font-size:1.15rem;font-weight:800;color:#e2e8f0;letter-spacing:-.3px}
-.vs-team .t-league{font-size:.68rem;color:#2a4060;margin-top:3px}
-.vs-team.home .t-name{color:#60a5fa}
-.vs-team.away .t-name{color:#f87171}
+.vs-team .t-name{font-size:1.05rem;font-weight:800;color:#d0dce8;letter-spacing:-.2px}
+.vs-team .t-league{font-size:.62rem;color:#2a3a4a;margin-top:3px;text-transform:uppercase;letter-spacing:.08em}
+.vs-team.home .t-name{color:#4c9eff}
+.vs-team.away .t-name{color:#ff7070}
 .vs-middle{text-align:center}
-.vs-badge{
-  background:#0a1628;border:1px solid #1a3050;border-radius:12px;
-  padding:8px 16px;display:inline-block
-}
-.vs-badge .vb-vs{font-size:.7rem;color:#1a3050;font-weight:700;letter-spacing:.15em}
-.vs-badge .vb-time{font-size:1rem;font-weight:700;color:#00e5a0;
-font-family:'JetBrains Mono',monospace;display:block;margin-top:2px}
-.vs-badge .vb-date{font-size:.65rem;color:#2a4060;margin-top:1px}
+.vs-badge{background:#0d1829;border:1px solid #1c2e44;border-radius:9px;padding:7px 13px;display:inline-block}
+.vs-badge .vb-vs{font-size:.62rem;color:#2a3a4a;font-weight:700;letter-spacing:.15em}
+.vs-badge .vb-time{font-size:.9rem;font-weight:700;color:#00e5a0;font-family:'JetBrains Mono',monospace;display:block;margin-top:2px}
+.vs-badge .vb-date{font-size:.6rem;color:#2a3a4a;margin-top:1px}
 
-/* ── XG GÖSTERGE ── */
-.xg-bar-section{padding:1.2rem 1.8rem;border-bottom:1px solid #0a1e30}
-.xg-bar-wrap{display:flex;align-items:center;gap:0;height:32px;border-radius:8px;overflow:hidden;margin:8px 0}
+/* ── XG BAR ── */
+.xg-bar-section{padding:.9rem 1.5rem;border-bottom:1px solid #1c2e44}
+.xg-bar-wrap{display:flex;align-items:center;height:26px;border-radius:5px;overflow:hidden;margin:5px 0}
 .xg-bar-home{height:100%;display:flex;align-items:center;justify-content:flex-end;
-padding-right:10px;background:linear-gradient(90deg,#1d4ed8,#2563eb);
-font-size:.82rem;font-weight:700;color:#bfdbfe;font-family:'JetBrains Mono',monospace;
-transition:width .5s}
-.xg-bar-mid{background:#040b14;padding:0 8px;display:flex;align-items:center;
-font-size:.6rem;color:#1a3050;font-weight:700;white-space:nowrap;height:100%}
+  padding-right:9px;background:linear-gradient(90deg,#1a4ed8,#3b7afc);
+  font-size:.75rem;font-weight:700;color:#c8dbff;font-family:'JetBrains Mono',monospace;transition:width .5s}
+.xg-bar-mid{background:#060c17;padding:0 5px;display:flex;align-items:center;
+  font-size:.52rem;color:#1c2e44;font-weight:700;white-space:nowrap;height:100%}
 .xg-bar-away{height:100%;display:flex;align-items:center;
-padding-left:10px;background:linear-gradient(90deg,#dc2626,#ef4444);
-font-size:.82rem;font-weight:700;color:#fecaca;font-family:'JetBrains Mono',monospace;
-transition:width .5s}
-.xg-label{display:flex;justify-content:space-between;font-size:.68rem;color:#2a4060;margin-top:3px}
+  padding-left:9px;background:linear-gradient(90deg,#c92b2b,#f05050);
+  font-size:.75rem;font-weight:700;color:#ffd0d0;font-family:'JetBrains Mono',monospace;transition:width .5s}
+.xg-label{display:flex;justify-content:space-between;font-size:.63rem;color:#4a6880;margin-top:3px}
 
-/* ── İKİ SÜTUN VERİ PANEL ── */
-.data-panel{display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid #0a1e30}
-.dp-col{padding:1.2rem 1.8rem}
-.dp-col.home-col{border-right:1px solid #0a1e30}
-.dp-section-title{font-size:.62rem;font-weight:700;letter-spacing:.12em;
-text-transform:uppercase;color:#1a3050;margin-bottom:8px;padding-bottom:4px;
-border-bottom:1px solid #0a1e30}
-.dp-row{display:flex;justify-content:space-between;align-items:center;
-padding:4px 0;border-bottom:1px solid #050d18}
-.dp-row .dr-label{font-size:.72rem;color:#3a5570}
-.dp-row .dr-val{font-size:.78rem;font-weight:600;color:#c0cfe0;
-font-family:'JetBrains Mono',monospace}
-.dp-row .dr-val.good{color:#34d399}
+/* ── VERİ PANELİ (2 sütun) ── */
+.data-panel{display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid #1c2e44}
+.dp-col{padding:.9rem 1.5rem}
+.dp-col.home-col{border-right:1px solid #1c2e44}
+.dp-section-title{font-size:.56rem;font-weight:700;letter-spacing:.13em;text-transform:uppercase;
+  color:#4a6880;margin-bottom:6px;padding-bottom:3px;border-bottom:1px solid #1c2e44}
+.dp-row{display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid #0d1423}
+.dp-row:last-child{border-bottom:none}
+.dp-row .dr-label{font-size:.68rem;color:#4a6880}
+.dp-row .dr-val{font-size:.74rem;font-weight:600;color:#a8c4d8;font-family:'JetBrains Mono',monospace}
+.dp-row .dr-val.good{color:#3ecf7a}
 .dp-row .dr-val.bad{color:#f87171}
-.dp-row .dr-val.warn{color:#fbbf24}
+.dp-row .dr-val.warn{color:#f5a623}
 
-/* Form sekmesi — harf kutucukları */
-.form-badges{display:flex;gap:4px;flex-wrap:wrap;margin:4px 0}
-.fb{width:26px;height:26px;border-radius:5px;display:flex;align-items:center;
-justify-content:center;font-size:.72rem;font-weight:700}
-.fb.g{background:#052e16;color:#34d399;border:1px solid #166534}
-.fb.b{background:#1c1a00;color:#fbbf24;border:1px solid #854d0e}
-.fb.m{background:#450a0a;color:#f87171;border:1px solid #991b1b}
+/* Form rozetleri */
+.form-badges{display:flex;gap:4px;flex-wrap:wrap;margin:3px 0}
+.fb{width:23px;height:23px;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:.68rem;font-weight:700}
+.fb.g{background:#04200e;color:#3ecf7a;border:1px solid #1a5c32}
+.fb.b{background:#1a1600;color:#f5a623;border:1px solid #6b4400}
+.fb.m{background:#200606;color:#f87171;border:1px solid #6b1c1c}
 
-/* Son skorlar */
-.score-list{display:flex;gap:5px;flex-wrap:wrap;margin:4px 0}
-.sc-badge{background:#0a1628;border:1px solid #0f2a45;border-radius:5px;
-padding:3px 7px;font-size:.72rem;font-weight:600;color:#c0cfe0;
-font-family:'JetBrains Mono',monospace}
-.sc-badge.iy{border-color:#1a3050;color:#6b7280}
+/* Skor rozetleri */
+.score-list{display:flex;gap:4px;flex-wrap:wrap;margin:3px 0}
+.sc-badge{background:#111f35;border:1px solid #1c2e44;border-radius:4px;
+  padding:2px 6px;font-size:.68rem;font-weight:600;color:#a8c4d8;font-family:'JetBrains Mono',monospace}
+.sc-badge.iy{border-color:#1c2e44;color:#4a6880}
 
-/* ── ORTA VS PANEL ── */
-.vs-compare{padding:1.2rem 1.8rem;border-bottom:1px solid #0a1e30}
-.vc-row{display:grid;grid-template-columns:1fr 80px 1fr;gap:8px;
-align-items:center;padding:5px 0;border-bottom:1px solid #050d18}
+/* ── KARŞILAŞTIRMA SATIRI ── */
+.vs-compare{padding:.9rem 1.5rem;border-bottom:1px solid #1c2e44}
+.vc-row{display:grid;grid-template-columns:1fr 90px 1fr;gap:6px;align-items:center;padding:4px 0;border-bottom:1px solid #0d1423}
 .vc-row:last-child{border:none}
 .vc-home{text-align:right}
 .vc-away{text-align:left}
-.vc-label{text-align:center;font-size:.65rem;color:#2a4060;font-weight:600;
-letter-spacing:.05em;text-transform:uppercase}
-.vc-val{font-size:.85rem;font-weight:700;font-family:'JetBrains Mono',monospace}
-.vc-val.better{color:#34d399}
-.vc-val.worse{color:#6b7280}
-.vc-val.equal{color:#fbbf24}
+.vc-label{text-align:center;font-size:.6rem;color:#2a3a4a;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+.vc-val{font-size:.8rem;font-weight:700;font-family:'JetBrains Mono',monospace}
+.vc-val.better{color:#3ecf7a}
+.vc-val.worse{color:#4a6880}
+.vc-val.equal{color:#f5a623}
 
 /* ── OLASILİK PANEL ── */
-.prob-panel{padding:1.2rem 1.8rem;border-bottom:1px solid #0a1e30}
-.ms-trio{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:10px 0}
-.ms-box{background:#0a1628;border:1px solid #0f2a45;border-radius:10px;
-padding:10px 8px;text-align:center}
-.ms-box.fav-home{border-color:#2563eb;background:#070d1f}
-.ms-box.fav-away{border-color:#dc2626;background:#1a0505}
-.ms-box.fav-draw{border-color:#d97706;background:#140e00}
-.ms-box .mb-label{font-size:.6rem;color:#2a4060;text-transform:uppercase;
-letter-spacing:.1em;margin-bottom:4px}
-.ms-box .mb-name{font-size:.65rem;color:#3a5570;margin-top:2px;
-white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ms-box .mb-pct{font-size:1.5rem;font-weight:800;font-family:'JetBrains Mono',monospace}
-.fav-home .mb-pct{color:#60a5fa}
-.fav-away .mb-pct{color:#f87171}
-.fav-draw .mb-pct{color:#fbbf24}
-.default .mb-pct{color:#4a6080}
+.prob-panel{padding:.9rem 1.5rem;border-bottom:1px solid #1c2e44}
+.ms-trio{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;margin:7px 0}
+.ms-box{background:#111f35;border:1px solid #1c2e44;border-radius:8px;padding:9px 6px;text-align:center}
+.ms-box.fav-home{border-color:#1e4ed8;background:#081530}
+.ms-box.fav-away{border-color:#b91c1c;background:#160808}
+.ms-box.fav-draw{border-color:#b45309;background:#120e00}
+.ms-box .mb-label{font-size:.56rem;color:#4a6880;text-transform:uppercase;letter-spacing:.1em;margin-bottom:3px}
+.ms-box .mb-name{font-size:.6rem;color:#2a3a4a;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ms-box .mb-pct{font-size:1.35rem;font-weight:800;font-family:'JetBrains Mono',monospace}
+.fav-home .mb-pct{color:#4c9eff}
+.fav-away .mb-pct{color:#ff7070}
+.fav-draw .mb-pct{color:#f5a623}
+.default .mb-pct{color:#4a6880}
 
 /* ── SKOR DAĞILIMI ── */
-.skor-panel{padding:1.2rem 1.8rem;border-bottom:1px solid #0a1e30}
-.skor-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:8px 0}
-.skor-box{background:#0a1628;border:1px solid #0f2a45;border-radius:8px;
-padding:8px 6px;text-align:center;cursor:default}
-.skor-box .sb-score{font-size:1.05rem;font-weight:700;color:#c0cfe0;
-font-family:'JetBrains Mono',monospace}
-.skor-box .sb-pct{font-size:.62rem;color:#2a4060;margin-top:2px}
-.skor-box.rank1{border-color:#f59e0b;background:#0f0900}
-.skor-box.rank1 .sb-score{color:#fbbf24}
-.skor-box.rank1 .sb-pct{color:#92700a}
-.skor-box.rank2{border-color:#2563eb;background:#040d1f}
-.skor-box.rank2 .sb-score{color:#60a5fa}
+.skor-panel{padding:.9rem 1.5rem;border-bottom:1px solid #1c2e44}
+.skor-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin:6px 0}
+.skor-box{background:#111f35;border:1px solid #1c2e44;border-radius:6px;padding:7px 4px;text-align:center}
+.skor-box .sb-score{font-size:.95rem;font-weight:700;color:#a8c4d8;font-family:'JetBrains Mono',monospace}
+.skor-box .sb-pct{font-size:.58rem;color:#4a6880;margin-top:2px}
+.skor-box.rank1{border-color:#b45309;background:#0e0a00}
+.skor-box.rank1 .sb-score{color:#f5a623}
+.skor-box.rank1 .sb-pct{color:#6b4400}
+.skor-box.rank2{border-color:#1d4ed8;background:#06101e}
+.skor-box.rank2 .sb-score{color:#4c9eff}
 .skor-box.rank2 .sb-pct{color:#1e3a7a}
-.skor-box.rank3{border-color:#16a34a;background:#040f09}
-.skor-box.rank3 .sb-score{color:#4ade80}
+.skor-box.rank3{border-color:#166534;background:#041209}
+.skor-box.rank3 .sb-score{color:#3ecf7a}
 
 /* ── İY/MS KOMBOLAR ── */
-.combo-panel{padding:1.2rem 1.8rem;border-bottom:1px solid #0a1e30}
-.combo-title{font-size:.62rem;color:#2a4060;font-weight:700;
-letter-spacing:.12em;text-transform:uppercase;margin-bottom:10px}
-.combo-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
-.combo-cell{background:#0a1628;border:1px solid #0f2a45;border-radius:8px;
-padding:8px 6px;text-align:center}
-.combo-cell .cc-key{font-size:.95rem;font-weight:800;font-family:'JetBrains Mono',monospace;
-color:#6b7280}
-.combo-cell .cc-pct{font-size:.68rem;color:#1a3050;margin-top:2px}
-.combo-cell .cc-desc{font-size:.55rem;color:#162030;margin-top:1px}
-.combo-cell.top1{border-color:#f59e0b;background:#0f0900}
-.combo-cell.top1 .cc-key{color:#fbbf24}
-.combo-cell.top1 .cc-pct{color:#92700a}
-.combo-cell.top2{border-color:#2563eb;background:#040d1f}
-.combo-cell.top2 .cc-key{color:#60a5fa}
+.combo-panel{padding:.9rem 1.5rem;border-bottom:1px solid #1c2e44}
+.combo-title{font-size:.56rem;color:#4a6880;font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px}
+.combo-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}
+.combo-cell{background:#111f35;border:1px solid #1c2e44;border-radius:6px;padding:7px 5px;text-align:center}
+.combo-cell .cc-key{font-size:.88rem;font-weight:800;font-family:'JetBrains Mono',monospace;color:#4a6880}
+.combo-cell .cc-pct{font-size:.64rem;color:#4a6880;margin-top:2px}
+.combo-cell .cc-desc{font-size:.53rem;color:#2a3a4a;margin-top:1px}
+.combo-cell.top1{border-color:#b45309;background:#0e0a00}
+.combo-cell.top1 .cc-key{color:#f5a623}
+.combo-cell.top1 .cc-pct{color:#7a5010}
+.combo-cell.top2{border-color:#1d4ed8;background:#06101e}
+.combo-cell.top2 .cc-key{color:#4c9eff}
 .combo-cell.top2 .cc-pct{color:#1e3a7a}
-.combo-cell.top3{border-color:#16a34a;background:#040f09}
-.combo-cell.top3 .cc-key{color:#4ade80}
+.combo-cell.top3{border-color:#166534;background:#041209}
+.combo-cell.top3 .cc-key{color:#3ecf7a}
 
 /* ── DÖNÜŞ PANEL ── */
-.donus-panel{padding:1.2rem 1.8rem;border-bottom:1px solid #0a1e30}
-.donus-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.donus-card{background:#0a1628;border:1px solid #0f2a45;border-radius:12px;padding:12px 14px}
-.donus-card.hot21{border-color:#f59e0b;background:#0c0900}
-.donus-card.hot12{border-color:#8b5cf6;background:#08050f}
-.donus-card .dc-title{font-size:.65rem;font-weight:700;letter-spacing:.08em;
-text-transform:uppercase;margin-bottom:6px}
-.donus-card.hot21 .dc-title{color:#f59e0b}
-.donus-card.hot12 .dc-title{color:#8b5cf6}
-.donus-card .dc-title{color:#1a3050}
-.donus-card .dc-explain{font-size:.7rem;color:#2a4060;margin-bottom:8px;line-height:1.5}
-.donus-row{display:flex;justify-content:space-between;align-items:center;
-padding:3px 0;border-bottom:1px solid #050d18}
+.donus-panel{padding:.9rem 1.5rem;border-bottom:1px solid #1c2e44}
+.donus-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.donus-card{background:#111f35;border:1px solid #1c2e44;border-radius:9px;padding:10px 12px}
+.donus-card.hot21{border-color:#b45309;background:#0c0800}
+.donus-card.hot12{border-color:#6d28d9;background:#070410}
+.donus-card .dc-title{font-size:.6rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin-bottom:5px;color:#4a6880}
+.donus-card.hot21 .dc-title{color:#f5a623}
+.donus-card.hot12 .dc-title{color:#a78bfa}
+.donus-card .dc-explain{font-size:.66rem;color:#4a6880;margin-bottom:6px;line-height:1.5}
+.donus-row{display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid #0d1423}
 .donus-row:last-child{border:none}
-.donus-row .dr-lbl{font-size:.65rem;color:#2a4060}
-.donus-row .dr-v{font-size:.82rem;font-weight:700;font-family:'JetBrains Mono',monospace}
+.donus-row .dr-lbl{font-size:.62rem;color:#4a6880}
+.donus-row .dr-v{font-size:.78rem;font-weight:700;font-family:'JetBrains Mono',monospace}
 
-/* ── TAHMIN PANEL ── */
-.tahmin-panel{padding:1.2rem 1.8rem;border-bottom:1px solid #0a1e30}
-.pred-card{border-radius:10px;padding:12px 14px;margin:6px 0;
-display:flex;align-items:flex-start;gap:10px}
-.pred-card.banko{background:#040f09;border:1px solid #166534}
-.pred-card.orta{background:#040d1f;border:1px solid #1d4ed8}
-.pred-card.risky{background:#0f0900;border:1px solid #9a3412}
-.pred-card.skor{background:#08050f;border:1px solid #6d28d9}
-.pred-icon{font-size:1.1rem;margin-top:1px}
-.pred-body .pt{font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
-.pred-card.banko .pt{color:#34d399}
-.pred-card.orta  .pt{color:#60a5fa}
-.pred-card.risky .pt{color:#fb923c}
-.pred-card.skor  .pt{color:#c4b5fd}
-.pred-body .pp{font-size:.88rem;font-weight:700;color:#e2e8f0;margin:2px 0;
-font-family:'JetBrains Mono',monospace}
-.pred-body .pw{font-size:.7rem;color:#3a5570;line-height:1.5}
+/* ── TAHMİN PANEL ── */
+.tahmin-panel{padding:.9rem 1.5rem;border-bottom:1px solid #1c2e44}
+.pred-card{border-radius:8px;padding:10px 12px;margin:5px 0;display:flex;align-items:flex-start;gap:9px}
+.pred-card.banko{background:#04180a;border:1px solid #166534}
+.pred-card.orta{background:#060f20;border:1px solid #1d4ed8}
+.pred-card.risky{background:#0e0800;border:1px solid #92400e}
+.pred-card.skor{background:#070410;border:1px solid #5b21b6}
+.pred-icon{font-size:.95rem;margin-top:2px}
+.pred-body .pt{font-size:.56rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+.pred-card.banko .pt{color:#3ecf7a}
+.pred-card.orta  .pt{color:#4c9eff}
+.pred-card.risky .pt{color:#f5a623}
+.pred-card.skor  .pt{color:#a78bfa}
+.pred-body .pp{font-size:.82rem;font-weight:700;color:#d0dce8;margin:3px 0;font-family:'JetBrains Mono',monospace}
+.pred-body .pw{font-size:.66rem;color:#4a6880;line-height:1.5}
 
 /* ── ANALİZ METNİ ── */
-.analiz-panel{padding:1.2rem 1.8rem}
-.analiz-title{font-size:.62rem;color:#2a4060;font-weight:700;
-letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px}
-.analiz-text{font-size:.8rem;color:#3a5570;line-height:1.9;
-white-space:pre-wrap;max-height:250px;overflow-y:auto}
+.analiz-panel{padding:.9rem 1.5rem}
+.analiz-title{font-size:.56rem;color:#4a6880;font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px}
+.analiz-text{font-size:.76rem;color:#7a9ab8;line-height:1.85;white-space:pre-wrap;max-height:200px;overflow-y:auto}
 
 /* ── GOL METRİKLER ── */
-.gol-panel{padding:1.2rem 1.8rem;border-bottom:1px solid #0a1e30}
-.gol-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-.gol-box{background:#0a1628;border:1px solid #0f2a45;border-radius:10px;
-padding:10px 8px;text-align:center}
-.gol-box .gb-label{font-size:.6rem;color:#2a4060;text-transform:uppercase;
-letter-spacing:.08em;margin-bottom:4px}
-.gol-box .gb-val{font-size:1.2rem;font-weight:800;font-family:'JetBrains Mono',monospace}
-.gol-box .gb-sub{font-size:.62rem;color:#2a4060;margin-top:2px}
-.gol-box.high .gb-val{color:#34d399}
-.gol-box.mid .gb-val{color:#fbbf24}
-.gol-box.low .gb-val{color:#f87171}
+.gol-panel{padding:.9rem 1.5rem;border-bottom:1px solid #1c2e44}
+.gol-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.gol-box{background:#111f35;border:1px solid #1c2e44;border-radius:7px;padding:8px 5px;text-align:center}
+.gol-box .gb-label{font-size:.56rem;color:#4a6880;text-transform:uppercase;letter-spacing:.08em;margin-bottom:3px}
+.gol-box .gb-val{font-size:1.1rem;font-weight:800;font-family:'JetBrains Mono',monospace}
+.gol-box .gb-sub{font-size:.58rem;color:#4a6880;margin-top:2px}
+.gol-box.high .gb-val{color:#3ecf7a}
+.gol-box.mid  .gb-val{color:#f5a623}
+.gol-box.low  .gb-val{color:#f87171}
 
 /* ── H2H PANEL ── */
-.h2h-panel{padding:1.2rem 1.8rem;border-bottom:1px solid #0a1e30}
-.h2h-score-list{display:flex;flex-wrap:wrap;gap:5px;margin:6px 0}
-.h2h-sc{background:#0a1628;border:1px solid #0f2a45;border-radius:5px;
-padding:3px 8px;font-size:.75rem;font-weight:600;color:#c0cfe0;
-font-family:'JetBrains Mono',monospace}
-.h2h-sc.iy{border-color:#0a1e30;color:#3a5570}
+.h2h-panel{padding:.9rem 1.5rem;border-bottom:1px solid #1c2e44}
+.h2h-score-list{display:flex;flex-wrap:wrap;gap:4px;margin:5px 0}
+.h2h-sc{background:#111f35;border:1px solid #1c2e44;border-radius:4px;
+  padding:2px 7px;font-size:.7rem;font-weight:600;color:#a8c4d8;font-family:'JetBrains Mono',monospace}
+.h2h-sc.iy{border-color:#1c2e44;color:#4a6880}
 
 /* ── DISCLAIMER ── */
-.disclaimer{font-size:.65rem;color:#1a3050;text-align:center;
-padding:8px;border-top:1px solid #0a1e30}
+.disclaimer{font-size:.6rem;color:#2a3a4a;text-align:center;padding:7px;border-top:1px solid #1c2e44}
+
+/* ── PATTERN PANEL — YENİ TASARIM ── */
+.pattern-wrap{background:#09101e;border:1px solid #1c2e44;border-radius:12px;margin:4px 0;overflow:hidden}
+.pattern-header{background:#09101e;padding:.75rem 1.2rem;border-bottom:1px solid #1c2e44;
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pattern-badge{background:#00e5a010;border:1px solid #00e5a028;
+  color:#00e5a0;font-size:.56rem;font-weight:700;letter-spacing:.1em;
+  text-transform:uppercase;padding:2px 8px;border-radius:20px}
+.pattern-badge.b365{background:#0a1e4010;border-color:#1e4ed828;color:#4c9eff}
+.pattern-title{font-size:.76rem;font-weight:700;color:#a8c4d8}
+.pattern-n{font-size:.64rem;color:#4a6880;margin-left:auto;font-family:'JetBrains Mono',monospace}
+.pattern-odds-row{background:#0d1829;padding:.5rem 1.2rem;border-bottom:1px solid #1c2e44;
+  display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.pat-odd-box{text-align:center}
+.pat-odd-lbl{font-size:.54rem;color:#4a6880;text-transform:uppercase;letter-spacing:.08em;display:block}
+.pat-odd-val{font-size:.95rem;font-weight:700;font-family:'JetBrains Mono',monospace;display:block}
+.pat-odd-box.home .pat-odd-val{color:#4c9eff}
+.pat-odd-box.draw .pat-odd-val{color:#f5a623}
+.pat-odd-box.away .pat-odd-val{color:#ff7070}
+.pat-odd-sep{color:#1c2e44;font-size:1.2rem}
+.pat-src{font-size:.58rem;color:#4a6880;margin-left:auto;
+  background:#111f35;border:1px solid #1c2e44;border-radius:4px;padding:2px 8px}
+.pat-src.bet365{color:#4c9eff;border-color:#1e4ed8;background:#06101e}
+.pattern-body{padding:.9rem 1.2rem}
+.pat-sec{margin-bottom:12px}
+.pat-sec-lbl{font-size:.56rem;font-weight:700;letter-spacing:.13em;text-transform:uppercase;
+  color:#4a6880;border-bottom:1px solid #1c2e44;padding-bottom:3px;margin-bottom:8px}
+/* Sonuç üçlüsü */
+.pat-res-trio{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px}
+.pat-res-box{border-radius:6px;padding:7px 5px;text-align:center}
+.pat-res-box .prb-lbl{font-size:.56rem;text-transform:uppercase;letter-spacing:.08em;margin-bottom:2px}
+.pat-res-box .prb-big{font-size:1.25rem;font-weight:800;font-family:'JetBrains Mono',monospace}
+.pat-res-box .prb-cnt{font-size:.58rem;margin-top:1px}
+.pat-home{background:#081530;border:1px solid #1e4ed8}
+.pat-home .prb-lbl,.pat-home .prb-cnt{color:#1e4ed8}
+.pat-home .prb-big{color:#4c9eff}
+.pat-draw{background:#120e00;border:1px solid #b45309}
+.pat-draw .prb-lbl,.pat-draw .prb-cnt{color:#b45309}
+.pat-draw .prb-big{color:#f5a623}
+.pat-away{background:#160808;border:1px solid #b91c1c}
+.pat-away .prb-lbl,.pat-away .prb-cnt{color:#b91c1c}
+.pat-away .prb-big{color:#ff7070}
+/* Skor listesi (bar formatı) */
+.skor-bar-list{display:flex;flex-direction:column;gap:4px}
+.skor-bar-row{display:flex;align-items:center;gap:7px}
+.skor-bar-key{font-size:.8rem;font-weight:700;font-family:'JetBrains Mono',monospace;min-width:32px;color:#a8c4d8}
+.skor-bar-track{flex:1;height:4px;background:#1c2e44;border-radius:3px;overflow:hidden}
+.skor-bar-fill{height:100%;border-radius:3px}
+.skor-bar-pct{font-size:.68rem;font-family:'JetBrains Mono',monospace;min-width:38px;text-align:right;color:#7a9ab8}
+.skor-bar-cnt{font-size:.58rem;color:#4a6880;min-width:24px}
+/* Dönüş kombolar */
+.pat-combo-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-bottom:10px}
+.pat-combo-cell{border-radius:6px;padding:6px 4px;text-align:center;background:#111f35;border:1px solid #1c2e44}
+.pat-combo-cell.donus{background:#0e0900;border-color:#b45309}
+.pat-combo-cell .pcc-key{font-size:.85rem;font-weight:800;font-family:'JetBrains Mono',monospace;color:#4a6880}
+.pat-combo-cell.donus .pcc-key{color:#f5a623}
+.pat-combo-cell .pcc-pct{font-size:.68rem;font-family:'JetBrains Mono',monospace;margin-top:2px;color:#4a6880}
+.pat-combo-cell.donus .pcc-pct{color:#f5a623}
+.pat-combo-cell .pcc-cnt{font-size:.54rem;color:#2a3a4a;margin-top:1px}
+/* Notable dönüş satırları */
+.notable-row{display:flex;align-items:center;gap:8px;padding:5px 8px;margin:3px 0;
+  background:#0e0900;border-left:3px solid #b45309;border-radius:0 6px 6px 0}
+.notable-combo{font-size:.82rem;font-weight:800;color:#f5a623;font-family:'JetBrains Mono',monospace;min-width:36px}
+.notable-text{font-size:.68rem;color:#a8c4d8;flex:1}
+.notable-pct{font-size:.8rem;font-weight:700;color:#f5a623;font-family:'JetBrains Mono',monospace}
+.notable-cnt{font-size:.6rem;color:#4a6880;margin-left:4px}
 
 /* Streamlit overrides */
-div[data-testid="stExpander"]{
-  border:1px solid #0f2a45!important;border-radius:16px!important;
-  background:#060d1c!important;overflow:hidden}
-div[data-testid="stExpander"] summary{background:#060d1c!important}
-.stTabs [data-baseweb="tab-list"]{background:#060d1c;padding:4px;gap:4px;border-radius:8px}
-.stTabs [data-baseweb="tab"]{border-radius:6px;color:#2a4060;font-size:.78rem;padding:5px 12px}
-.stTabs [aria-selected="true"]{background:#0a1628!important;color:#00e5a0!important}
+div[data-testid="stExpander"]{border:1px solid #1c2e44!important;border-radius:12px!important;background:#0d1829!important;overflow:hidden}
+div[data-testid="stExpander"] summary{background:#0d1829!important}
+.stTabs [data-baseweb="tab-list"]{background:#09101e;padding:3px;gap:3px;border-radius:7px}
+.stTabs [data-baseweb="tab"]{border-radius:5px;color:#4a6880;font-size:.74rem;padding:4px 11px}
+.stTabs [aria-selected="true"]{background:#111f35!important;color:#00e5a0!important}
 button[kind="primary"]{background:linear-gradient(90deg,#0ea5e9,#00e5a0)!important;
-color:#060d1c!important;font-weight:700!important;border:none!important;border-radius:8px!important}
+color:#06090f!important;font-weight:700!important;border:none!important;border-radius:7px!important}
 </style>
 """, unsafe_allow_html=True)
 
@@ -653,7 +696,7 @@ def fetch_fixtures_with_odds(couk_code):
             return []
 
     def extract_odds(rows, require_div=None):
-        """Satırlardan oran dict'i çıkar. FTHG boşsa oynanmamış demektir."""
+        """Satırlardan oran dict'i çıkar. FTHG boşsa oynanmamış demektir. Öncelik: B365 > Avg > PS > IW > VC"""
         out = {}
         for row in rows:
             if require_div and row.get("Div","").strip() != require_div:
@@ -666,24 +709,27 @@ def fetch_fixtures_with_odds(couk_code):
             fthg = row.get("FTHG","").strip()
             if fthg not in ("","?","-"):
                 continue
-            # Oran kaynağı önceliği: Avg > B365 > PS > IW > VC
+            # Oran kaynağı önceliği: B365 → Avg → PS → IW → VC
             def pick(*keys):
                 for k in keys:
                     v = _safe_float(row.get(k,""))
                     if v and v > 1.0: return v
                 return None
-            o1  = pick("AvgH","B365H","PSH","IWH","VCH","WHH")
-            ox  = pick("AvgD","B365D","PSD","IWD","VCD","WHD")
-            o2  = pick("AvgA","B365A","PSA","IWA","VCA","WHA")
+            # B365 önce
+            o1  = pick("B365H","AvgH","PSH","IWH","VCH","WHH")
+            ox  = pick("B365D","AvgD","PSD","IWD","VCD","WHD")
+            o2  = pick("B365A","AvgA","PSA","IWA","VCA","WHA")
             if not (o1 and ox and o2):
                 continue
-            o25 = pick("Avg>2.5","B365>2.5","P>2.5")
-            u25 = pick("Avg<2.5","B365<2.5","P<2.5")
+            o25 = pick("B365>2.5","Avg>2.5","P>2.5")
+            u25 = pick("B365<2.5","Avg<2.5","P<2.5")
+            # Hangi kaynaktan geldiğini işaretle
+            src = "Bet365" if row.get("B365H","").strip() else "football-data.co.uk"
             out[f"{home}|||{away}"] = {
                 "home":home,"away":away,
                 "o1":o1,"ox":ox,"o2":o2,
                 "o25_ov":o25,"o25_un":u25,
-                "source":"football-data.co.uk"
+                "source": f"football-data.co.uk ({src})"
             }
         return out
 
@@ -772,58 +818,76 @@ def get_af_fixture_id(af_key, league_id, match_date, home_name, away_name):
 
 def get_af_odds(af_key, fixture_id):
     """
-    API-Football /odds endpoint — tek çağrıda tüm bet türlerini çek.
-    Response: [{fixture, update, bookmakers:[{id,name,bets:[{id,name,values:[{value,odd}]}]}]}]
+    API-Football /odds endpoint — Bet365 öncelikli.
+    Bet365 bulunamazsa diğer bookmaker'lara geç.
     """
-    # Tek çağrıda tüm marketi çek (bet parametresi vermezsen hepsi gelir)
     odds_data = af_get("odds", {"fixture": fixture_id}, af_key)
 
     if debug:
         st.caption(f"🐛 AF /odds fixture={fixture_id} → {len(odds_data)} item")
 
-    o1 = ox = o2 = o25_ov = o25_un = None
+    # Bet365 önce tara, bulunamazsa ilk bookmaker'ı kullan
+    def parse_bookmaker(bm):
+        o1 = ox = o2 = o25_ov = o25_un = None
+        for bet in bm.get("bets", []):
+            bet_name = bet.get("name", "").lower()
+            bet_id   = bet.get("id", 0)
+            if (bet_id == 1 or "match winner" in bet_name) and o1 is None:
+                for v in bet.get("values", []):
+                    val = v.get("value", "")
+                    odd = _safe_float(v.get("odd"))
+                    if val in ("Home", "1"):    o1 = odd
+                    elif val in ("Draw", "X"):  ox = odd
+                    elif val in ("Away", "2"):  o2 = odd
+            if (bet_id == 5 or "goals over/under" in bet_name) and o25_ov is None:
+                for v in bet.get("values", []):
+                    val = v.get("value", "")
+                    odd = _safe_float(v.get("odd"))
+                    if "over" in val.lower() and "2.5" in val:  o25_ov = odd
+                    elif "under" in val.lower() and "2.5" in val: o25_un = odd
+        return o1, ox, o2, o25_ov, o25_un
+
+    best_o1 = best_ox = best_o2 = best_o25_ov = best_o25_un = None
+    best_source = "api-football.com"
 
     for item in odds_data:
-        for bm in item.get("bookmakers", []):
-            bm_name = bm.get("name", "")
-            for bet in bm.get("bets", []):
-                bet_name = bet.get("name", "").lower()
-                bet_id   = bet.get("id", 0)
+        bookmakers = item.get("bookmakers", [])
 
-                # Match Winner (1X2) — bet id 1 veya isim kontrolü
-                if (bet_id == 1 or "match winner" in bet_name) and o1 is None:
-                    for v in bet.get("values", []):
-                        val = v.get("value", "")
-                        odd = _safe_float(v.get("odd"))
-                        if val in ("Home", "1"):    o1 = odd
-                        elif val in ("Draw", "X"):  ox = odd
-                        elif val in ("Away", "2"):  o2 = odd
-                    if debug and o1:
-                        st.caption(f"🐛 Oran bulundu [{bm_name}]: 1={o1} X={ox} 2={o2}")
-
-                # Goals Over/Under — bet id 5 veya isim kontrolü
-                if (bet_id == 5 or "goals over/under" in bet_name) and o25_ov is None:
-                    for v in bet.get("values", []):
-                        val = v.get("value", "")
-                        odd = _safe_float(v.get("odd"))
-                        if "over" in val.lower() and "2.5" in val: o25_ov = odd
-                        elif "under" in val.lower() and "2.5" in val: o25_un = odd
-
-            # İlk bookmaker yeterli ama Bet365 varsa onu tercih et
-            if o1 and ox and o2 and "Bet365" in bm_name:
+        # Önce Bet365'i ara
+        bet365_bm = next((bm for bm in bookmakers
+                          if "bet365" in bm.get("name","").lower()), None)
+        if bet365_bm:
+            o1, ox, o2, o25_ov, o25_un = parse_bookmaker(bet365_bm)
+            if o1 and ox and o2:
+                best_o1, best_ox, best_o2 = o1, ox, o2
+                best_o25_ov, best_o25_un = o25_ov, o25_un
+                best_source = "Bet365"
+                if debug: st.caption(f"🐛 Bet365 oranı bulundu: 1={o1} X={ox} 2={o2}")
                 break
-        if o1 and ox and o2:
+
+        # Bet365 yoksa diğer bookmaker'ları dene
+        if not best_o1:
+            for bm in bookmakers:
+                o1, ox, o2, o25_ov, o25_un = parse_bookmaker(bm)
+                if o1 and ox and o2:
+                    best_o1, best_ox, best_o2 = o1, ox, o2
+                    best_o25_ov, best_o25_un = o25_ov, o25_un
+                    best_source = bm.get("name", "api-football.com")
+                    if debug: st.caption(f"🐛 [{best_source}] oranı bulundu: 1={o1} X={ox} 2={o2}")
+                    break
+
+        if best_o1:
             break
 
-    if not (o1 and ox and o2):
+    if not (best_o1 and best_ox and best_o2):
         if debug: st.caption(f"🐛 AF odds bulunamadı fixture_id={fixture_id}")
         return None
 
     return {
-        "o1": round(o1,2), "ox": round(ox,2), "o2": round(o2,2),
-        "o25_ov": round(o25_ov,2) if o25_ov else None,
-        "o25_un": round(o25_un,2) if o25_un else None,
-        "source": "api-football.com"
+        "o1": round(best_o1,2), "ox": round(best_ox,2), "o2": round(best_o2,2),
+        "o25_ov": round(best_o25_ov,2) if best_o25_ov else None,
+        "o25_un": round(best_o25_un,2) if best_o25_un else None,
+        "source": best_source
     }
 
 def get_match_odds(sel_code, odds_api_key, hn, an, auto_odds,
@@ -1018,23 +1082,28 @@ def _safe_float(val, default=None):
 def find_similar_odds_matches(rows, o1_target, ox_target, o2_target, tol=0.25):
     """
     Verilen oran aralığına benzer geçmiş maçları bul.
+    Öncelik: Bet365 → Avg → PS → IW → VC
     Tolerans: ±tol (örn: ±0.25 oran farkı kabul et)
-    Kolonlar: B365H/D/A veya AvgH/D/A
     """
     matched = []
     for row in rows:
-        # Oran kaynaklarını dene: Avg → B365 → PSH sırasıyla
-        h_odds = _safe_float(row.get("AvgH") or row.get("B365H") or row.get("PSH"))
-        d_odds = _safe_float(row.get("AvgD") or row.get("B365D") or row.get("PSD"))
-        a_odds = _safe_float(row.get("AvgA") or row.get("B365A") or row.get("PSA"))
+        # Öncelik sırası: Bet365 → Avg → PS → IW → VC
+        h_odds = _safe_float(row.get("B365H") or row.get("AvgH") or row.get("PSH") or row.get("IWH") or row.get("VCH"))
+        d_odds = _safe_float(row.get("B365D") or row.get("AvgD") or row.get("PSD") or row.get("IWD") or row.get("VCD"))
+        a_odds = _safe_float(row.get("B365A") or row.get("AvgA") or row.get("PSA") or row.get("IWA") or row.get("VCA"))
 
         if not h_odds or not d_odds or not a_odds:
             continue
+        if h_odds <= 1.0 or d_odds <= 1.0 or a_odds <= 1.0:
+            continue
 
-        # Oran tolerans kontrolü
         if (abs(h_odds - float(o1_target)) <= tol and
             abs(d_odds - float(ox_target)) <= tol and
             abs(a_odds - float(o2_target)) <= tol):
+            # Bet365 oranını kaydet (karşılaştırma için)
+            row["_b365h"] = h_odds
+            row["_b365d"] = d_odds
+            row["_b365a"] = a_odds
             matched.append(row)
 
     return matched
@@ -1121,129 +1190,177 @@ def analyze_score_patterns(matched_rows, o1, ox, o2):
         "imp_h": imp_h,
     }
 
-def render_pattern_panel(pattern, o1, ox, o2, h, a):
-    """Oran-Skor Pattern panelini render et."""
+def render_pattern_panel(pattern, o1, ox, o2, h, a, odds_source="football-data.co.uk"):
+    """Oran-Skor Pattern panelini render et — temiz, okunabilir tasarım."""
     if not pattern:
-        st.info("Bu oran aralığı için yeterli geçmiş maç bulunamadı. Toleransı artır veya farklı oranlar dene.")
+        st.info("Bu oran aralığı için yeterli geçmiş maç bulunamadı.")
         return
 
-    n    = pattern["n"]
+    n   = pattern["n"]
+    res = pattern["res_pct"]
+    htr = pattern["htr_pct"]
     mono = "JetBrains Mono,monospace"
 
-    def score_grid(scores_dict, title, score_color, pct_color, bg, border):
-        html = (f'<div><div style="font-size:.62rem;color:{score_color};font-weight:700;'
-                f'letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px;'
-                f'padding-bottom:4px;border-bottom:1px solid {border}">{title}</div>'
-                f'<div style="display:flex;flex-direction:column;gap:4px">')
-        for sc, pct in list(scores_dict.items())[:7]:
-            bar_w = min(100, int(pct * 3))
-            html += (f'<div style="display:flex;align-items:center;gap:8px">'
-                     f'<div style="font-size:.9rem;font-weight:800;color:{score_color};'
-                     f'font-family:{mono};min-width:36px">{sc}</div>'
-                     f'<div style="flex:1;background:#060d1c;border-radius:3px;height:5px;overflow:hidden">'
-                     f'<div style="width:{bar_w}%;height:100%;background:{score_color};opacity:.7;border-radius:3px"></div></div>'
-                     f'<div style="font-size:.75rem;color:{pct_color};font-family:{mono};min-width:38px;text-align:right">%{pct}</div>'
-                     f'</div>')
-        html += '</div></div>'
-        return html
+    # Kaynak rozet rengi
+    is_b365 = "bet365" in odds_source.lower() or "Bet365" in odds_source
+    src_cls  = "bet365" if is_b365 else ""
+    src_icon = "🔵 Bet365" if is_b365 else f"📊 {odds_source[:20]}"
 
-    def combo_grid(combos_dict):
-        html = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px">'
-        sorted_c = sorted(combos_dict.items(), key=lambda x:-x[1])
-        for k, pct in sorted_c:
-            iy_r, ms_r = k.split("/")
-            is_turnover = iy_r != ms_r
-            bg     = "#120a00" if is_turnover and pct>=10 else "#0a1628"
-            border = "#f59e0b" if is_turnover and pct>=10 else "#0f2a45"
-            kcolor = "#fbbf24" if is_turnover and pct>=10 else "#6b7280"
-            desc   = {"1/1":"İY=MS ev","X/1":"Dönüş X→1","2/1":"DÖNÜŞ 2/1",
-                      "1/X":"İY ev→ber","X/X":"Beraberlik","2/X":"İY dep→ber",
-                      "1/2":"DÖNÜŞ 1/2","X/2":"Dönüş X→2","2/2":"İY=MS dep"}.get(k,"")
-            html += (f'<div style="background:{bg};border:1px solid {border};border-radius:7px;'
-                     f'padding:7px 6px;text-align:center">'
-                     f'<div style="font-size:.9rem;font-weight:800;color:{kcolor};font-family:{mono}">{k}</div>'
-                     f'<div style="font-size:.68rem;color:#fbbf24;font-family:{mono};margin-top:2px">%{pct}</div>'
-                     f'<div style="font-size:.55rem;color:#2a4060;margin-top:1px">{desc}</div>'
-                     f'</div>')
+    # ── HEADER ────────────────────────────────────────────────────
+    header_html = (
+        f'<div class="pattern-wrap">'
+        f'<div class="pattern-header">'
+        f'<span class="pattern-badge b365">ORAN PATTERN</span>'
+        f'<span class="pattern-title">Benzer Bet365 Oranlarında Geçmiş Maçlar</span>'
+        f'<span class="pattern-n">{n} maç analiz edildi</span>'
+        f'</div>'
+        # Oran çubuğu
+        f'<div class="pattern-odds-row">'
+        f'<div class="pat-odd-box home"><span class="pat-odd-lbl">{h[:12]}</span>'
+        f'<span class="pat-odd-val">{o1}</span></div>'
+        f'<span class="pat-odd-sep">·</span>'
+        f'<div class="pat-odd-box draw"><span class="pat-odd-lbl">Beraberlik</span>'
+        f'<span class="pat-odd-val">{ox}</span></div>'
+        f'<span class="pat-odd-sep">·</span>'
+        f'<div class="pat-odd-box away"><span class="pat-odd-lbl">{a[:12]}</span>'
+        f'<span class="pat-odd-val">{o2}</span></div>'
+        f'<span class="pat-src {src_cls}">{src_icon} · ±0.25 tolerans</span>'
+        f'</div>'
+    )
+
+    # ── MS + İY SONUÇ KUTULARI ───────────────────────────────────
+    def res_trio(res_dict, home_lbl, away_lbl, prefix=""):
+        total_n = n  # maç sayısı
+        return (
+            f'<div class="pat-res-trio">'
+            f'<div class="pat-res-box pat-home">'
+            f'<div class="prb-lbl">{prefix}{home_lbl[:10]}</div>'
+            f'<div class="prb-big">%{res_dict.get("1",0)}</div>'
+            f'<div class="prb-cnt">{round(res_dict.get("1",0)*total_n/100)} maç</div>'
+            f'</div>'
+            f'<div class="pat-res-box pat-draw">'
+            f'<div class="prb-lbl">{prefix}Beraberlik</div>'
+            f'<div class="prb-big">%{res_dict.get("X",0)}</div>'
+            f'<div class="prb-cnt">{round(res_dict.get("X",0)*total_n/100)} maç</div>'
+            f'</div>'
+            f'<div class="pat-res-box pat-away">'
+            f'<div class="prb-lbl">{prefix}{away_lbl[:10]}</div>'
+            f'<div class="prb-big">%{res_dict.get("2",0)}</div>'
+            f'<div class="prb-cnt">{round(res_dict.get("2",0)*total_n/100)} maç</div>'
+            f'</div>'
+            f'</div>'
+        )
+
+    # ── SKOR BAR LİSTESİ ────────────────────────────────────────
+    def skor_bar_list(scores_dict, fill_color):
+        if not scores_dict:
+            return '<div style="font-size:.68rem;color:#4a6880">Veri yetersiz</div>'
+        html = '<div class="skor-bar-list">'
+        max_pct = max(scores_dict.values()) if scores_dict else 1
+        for sc, pct in list(scores_dict.items())[:8]:
+            bar_w = max(3, int(pct / max_pct * 100))
+            cnt = max(1, round(pct * n / 100))
+            html += (
+                f'<div class="skor-bar-row">'
+                f'<div class="skor-bar-key">{sc}</div>'
+                f'<div class="skor-bar-track">'
+                f'<div class="skor-bar-fill" style="width:{bar_w}%;background:{fill_color}"></div>'
+                f'</div>'
+                f'<div class="skor-bar-pct">%{pct}</div>'
+                f'<div class="skor-bar-cnt">({cnt})</div>'
+                f'</div>'
+            )
         html += '</div>'
         return html
 
-    res = pattern["res_pct"]
-    htr = pattern["htr_pct"]
-
-    st.markdown(
-        f'<div style="padding:1.2rem 1.8rem;border-bottom:1px solid #0a1e30">'
-        f'<div class="dp-section-title">🔍 ORAN-SKOR PATTERN — Benzer Oranlı {n} Geçmiş Maç</div>'
-        f'<div style="font-size:.7rem;color:#2a4060;margin-bottom:10px">'
-        f'Oran: <b style="color:#60a5fa">{o1}</b> / <b style="color:#fbbf24">{ox}</b> / <b style="color:#f87171">{o2}</b> '
-        f'— ±0.25 tolerans ile eşleşen maçlar</div>'
-
-        # MS / İY sonuç oranları
-        f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">'
-        f'<div style="background:#0a1628;border:1px solid #0f2a45;border-radius:8px;padding:10px">'
-        f'<div style="font-size:.6rem;color:#3a5570;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px">MS SONUÇLARI</div>'
-        f'<div style="display:flex;gap:6px">'
-        + "".join(
-            (lambda lbl, bg, bd, fc:
-                f'<div style="flex:1;text-align:center;background:{bg};'
-                f'border:1px solid {bd};border-radius:6px;padding:6px">'
-                f'<div style="font-size:.65rem;color:#3a5570">{lbl}</div>'
-                f'<div style="font-size:1.2rem;font-weight:800;color:{fc};font-family:{mono}">%{v}</div>'
+    # ── COMBO GRID ───────────────────────────────────────────────
+    def combo_grid_html(combos_dict):
+        combo_desc = {
+            "1/1": "Ev önde kalır","X/1": "Ber→Ev kazanır","2/1": "DEP→EV DÖNÜŞ",
+            "1/X": "Ev→Beraberlik","X/X": "Her yarı ber.","2/X": "Dep→Beraberlik",
+            "1/2": "EV→DEP DÖNÜŞ","X/2": "Ber→Dep kazanır","2/2": "Dep önde kalır",
+        }
+        html = '<div class="pat-combo-grid">'
+        for k, pct in sorted(combos_dict.items(), key=lambda x: -x[1]):
+            iy_r, ms_r = k.split("/")
+            is_t = (iy_r != ms_r)
+            cls  = "pat-combo-cell donus" if is_t and pct >= 8 else "pat-combo-cell"
+            cnt  = round(pct * n / 100)
+            html += (
+                f'<div class="{cls}">'
+                f'<div class="pcc-key">{k}</div>'
+                f'<div class="pcc-pct">%{pct}</div>'
+                f'<div class="pcc-cnt">{combo_desc.get(k,"")} ({cnt})</div>'
                 f'</div>'
-            )(
-                h[:10] if k=="1" else ("Berab." if k=="X" else a[:10]),
-                "#061d0f" if k=="1" else ("#140e00" if k=="X" else "#1a0505"),
-                "#1d4ed8" if k=="1" else ("#854d0e" if k=="X" else "#991b1b"),
-                "#60a5fa" if k=="1" else ("#fbbf24" if k=="X" else "#f87171"),
             )
-            for k, v in [("1", res.get("1",0)), ("X", res.get("X",0)), ("2", res.get("2",0))]
-        )
-        + f'</div></div>'
-        f'<div style="background:#0a1628;border:1px solid #0f2a45;border-radius:8px;padding:10px">'
-        f'<div style="font-size:.6rem;color:#3a5570;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px">İY SONUÇLARI</div>'
-        f'<div style="display:flex;gap:6px">'
-        + "".join(
-            f'<div style="flex:1;text-align:center;background:#0a0f1a;'
-            f'border:1px solid #1a2e4a;border-radius:6px;padding:6px">'
-            f'<div style="font-size:.65rem;color:#3a5570">İY {k}</div>'
-            f'<div style="font-size:1.2rem;font-weight:800;color:#c4b5fd;font-family:{mono}">%{v}</div>'
-            f'</div>'
-            for k, v in [("1", htr.get("1",0)), ("X", htr.get("X",0)), ("2", htr.get("2",0))]
-        )
-        + f'</div></div></div>'
+        html += '</div>'
+        return html
 
-        # İY/MS kombolar
-        f'<div style="margin-bottom:12px">'
-        f'<div style="font-size:.62rem;color:#3a5570;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px">'
-        f'İY/MS KOMBİNASYONLARI — Sarı = Dönüş (2/1 veya 1/2)</div>'
-        + combo_grid(pattern["trn_pct"])
-        + f'</div>'
+    # ── NOTABLE DÖNÜŞLER ─────────────────────────────────────────
+    notable_html = ""
+    if pattern.get("notable_turnovers"):
+        notable_html = '<div class="pat-sec"><div class="pat-sec-lbl">⚡ Öne Çıkan Dönüşler</div>'
+        for combo, pct in pattern["notable_turnovers"]:
+            cnt = round(pct * n / 100)
+            label = "İY Dep → MS Ev Kazandı" if combo == "2/1" else \
+                    "İY Ev → MS Dep Kazandı" if combo == "1/2" else \
+                    f"Dönüş {combo}"
+            notable_html += (
+                f'<div class="notable-row">'
+                f'<div class="notable-combo">{combo}</div>'
+                f'<div class="notable-text">{label} — bu oran aralığında</div>'
+                f'<div class="notable-pct">%{pct}</div>'
+                f'<div class="notable-cnt">({cnt}/{n})</div>'
+                f'</div>'
+            )
+        notable_html += '</div>'
+
+    # ── HEPSİNİ BİRLEŞTİR ───────────────────────────────────────
+    body_html = (
+        f'{header_html}'
+        f'<div class="pattern-body">'
+
+        # MS Sonuçlar
+        f'<div class="pat-sec">'
+        f'<div class="pat-sec-lbl">Maç Sonu Sonuçları — Bu oran aralığında {n} maçta</div>'
+        + res_trio(res, h, a, prefix="MS ") +
+        f'</div>'
+
+        # İY Sonuçlar
+        f'<div class="pat-sec">'
+        f'<div class="pat-sec-lbl">İlk Yarı Sonuçları — Aynı {n} maçta</div>'
+        + res_trio(htr, h, a, prefix="İY ") +
+        f'</div>'
+
+        # İY/MS Kombolar
+        f'<div class="pat-sec">'
+        f'<div class="pat-sec-lbl">İY / MS Kombinasyonları — Dönüş Analizi (turuncu = dönüş)</div>'
+        + combo_grid_html(pattern["trn_pct"]) +
+        f'</div>'
+
+        # Notable dönüşler
+        + notable_html +
 
         # Skor dağılımları
         f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">'
-        + score_grid(pattern["ms_top"], "🏁 MS SKORLAR (En Sık Çıkanlar)", "#34d399","#6ee7b7","#040f09","#0d3320")
-        + score_grid(pattern["ht_top"], "🕐 İY SKORLAR (En Sık Çıkanlar)", "#c4b5fd","#a78bfa","#0d0a1a","#2d1d5e")
-        + f'</div>'
+        f'<div class="pat-sec">'
+        f'<div class="pat-sec-lbl">Maç Sonu Skor Dağılımı</div>'
+        + skor_bar_list(pattern["ms_top"], "#3ecf7a") +
+        f'</div>'
+        f'<div class="pat-sec">'
+        f'<div class="pat-sec-lbl">İlk Yarı Skor Dağılımı</div>'
+        + skor_bar_list(pattern["ht_top"], "#a78bfa") +
+        f'</div></div>'
 
-        # Notable dönüşler
-        + (
-            f'<div style="margin-top:10px">'
-            f'<div style="font-size:.62rem;color:#f59e0b;text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px">⚡ ÖNE ÇIKAN DÖNÜŞLER</div>'
-            + "".join(
-                f'<div style="font-size:.75rem;color:#fde68a;padding:5px 10px;margin:3px 0;'
-                f'background:#120a00;border-left:3px solid #f59e0b;border-radius:0 6px 6px 0">'
-                f'{combo} dönüşü — Bu oran aralığında <b>%{pct}</b> oranında gerçekleşti ({round(pct*n/100)}/{n} maç)'
-                f'</div>'
-                for combo, pct in pattern["notable_turnovers"]
-            )
-            + f'</div>'
-            if pattern["notable_turnovers"] else ""
-        )
-        + f'<div style="font-size:.65rem;color:#1a3050;margin-top:8px;text-align:right">'
-        f'Sürpriz oranı: %{pattern["upset_rate"]} (favori kaybetti veya berabere kaldı)</div>'
-        f'</div>',
-        unsafe_allow_html=True
+        # Alt not
+        f'<div style="font-size:.58rem;color:#2a3a4a;margin-top:8px;text-align:right;padding-top:6px;border-top:1px solid #1c2e44">'
+        f'Sürpriz oranı (favori kaybet/berabere): %{pattern["upset_rate"]}'
+        f'</div>'
+
+        f'</div></div>'  # pattern-body + pattern-wrap
     )
+
+    st.markdown(body_html, unsafe_allow_html=True)
 
 def odds_implied_probs(o1, ox, o2):
     """Oranlardan zımni olasılık (vig çıkarılmış)."""
@@ -2700,7 +2817,8 @@ if st.session_state.matches:
 
                 # ── Pattern Paneli — analiz beklenmez ────────
                 if pd_ and oa:
-                    render_pattern_panel(pd_, oa.get("o1",0), oa.get("ox",0), oa.get("o2",0), hn, an)
+                    render_pattern_panel(pd_, oa.get("o1",0), oa.get("ox",0), oa.get("o2",0), hn, an,
+                                         odds_source=oa.get("_source","football-data.co.uk"))
                 elif not oa:
                     st.info("💡 Oran verisi bulunamadı. Lig fixtures.csv'de bu maç yoksa sonraki hafta güncellenir.")
 
