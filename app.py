@@ -378,34 +378,46 @@ with st.sidebar:
     debug     = st.checkbox("🐛 Debug", value=False)
 
     st.divider()
-    st.markdown("### 💰 Oran & Pattern Ayarları")
-    st.markdown("""<div style="background:#0a1628;border:1px solid #1e3a5f;border-left:3px solid #00e5a0;
-border-radius:6px;padding:8px 10px;font-size:.74rem;color:#6b7280;line-height:1.8;margin-bottom:8px">
-<b style="color:#00e5a0">API-Football — ÜCRETSİZ</b><br>
-→ <a href="https://dashboard.api-football.com/register" target="_blank" style="color:#60a5fa">
-dashboard.api-football.com/register</a><br>
-→ E-mail + şifre ile kayıt (onay maili geliyor)<br>
-→ Dashboard → My Access → API Key kopyala<br>
-→ <b style="color:#e2e8f0">100 istek/gün ücretsiz · Kart yok</b><br>
-→ Tüm ligler + gerçek bookmaker oranları
+    st.markdown("### 💰 Oran Kaynakları")
+
+    # ── The Odds API (önerilen, ücretsiz 500 istek/ay) ──
+    st.markdown("""<div style="background:#0d1829;border:1px solid #1c2e44;border-left:3px solid #00e5a0;
+border-radius:6px;padding:8px 10px;font-size:.73rem;color:#7a9ab8;line-height:1.9;margin-bottom:6px">
+<b style="color:#00e5a0">⭐ The Odds API — ÖNERİLEN</b><br>
+→ <a href="https://the-odds-api.com" target="_blank" style="color:#4c9eff">the-odds-api.com</a> · ücretsiz kayıt<br>
+→ <b style="color:#d0dce8">500 istek/ay ücretsiz · Kart yok</b><br>
+→ Bet365, Pinnacle, Unibet gerçek oranları<br>
+→ Premier League, La Liga, Bundesliga vb.
 </div>""", unsafe_allow_html=True)
-    apifootball_key = st.text_input(
-        "API-Football Key",
-        value=AF_KEY_DEFAULT,
+    odds_api_key = st.text_input(
+        "The Odds API Key",
+        value="",
         type="password",
-        placeholder="dashboard.api-football.com → API Key",
-        help="Ücretsiz: dashboard.api-football.com/register"
+        placeholder="the-odds-api.com → API Key",
+        help="https://the-odds-api.com — ücretsiz 500 istek/ay"
     )
+
+    # ── API-Football (yedek) ──
+    with st.expander("⚙️ API-Football Key (yedek)", expanded=False):
+        st.caption("The Odds API bulamazsa fallback. Ücretsiz 100 istek/gün.")
+        apifootball_key = st.text_input(
+            "API-Football Key",
+            value=AF_KEY_DEFAULT,
+            type="password",
+            placeholder="dashboard.api-football.com → API Key",
+        )
+    if 'apifootball_key' not in dir():
+        apifootball_key = AF_KEY_DEFAULT
+
     auto_odds = st.checkbox("✅ Oranları otomatik çek", value=True,
-        help="API-Football key varsa gerçek oranlar · Yoksa fdco.uk CSV denenir")
+        help="The Odds API → API-Football → fdco.uk CSV → model tahmini sırasıyla dener")
     tolerance = st.slider("Oran Toleransı (±)", 0.10, 0.60, 0.30, 0.05,
                            help="Geçmiş pattern aramasında kabul edilen oran farkı")
     n_seasons = st.slider("Kaç Sezon Analiz Edilsin", 1, 5, 3)
     use_manual_odds = False
     manual_o1 = manual_ox = manual_o2 = None
-    odds_api_key = ""
-    with st.expander("🖊️ Manuel Oran Giriş", expanded=False):
-        st.caption("Oran otomatik çekilemezse buraya gir")
+    with st.expander("✏️ Manuel Oran Giriş", expanded=False):
+        st.caption("Hiçbir kaynak çalışmazsa buraya gir")
         manual_o1 = st.number_input("1 (Ev Kazanır)", min_value=1.01, max_value=30.0, value=2.0, step=0.01, format="%.2f")
         manual_ox = st.number_input("X (Beraberlik)", min_value=1.01, max_value=30.0, value=3.20, step=0.01, format="%.2f")
         manual_o2 = st.number_input("2 (Dep Kazanır)", min_value=1.01, max_value=30.0, value=3.80, step=0.01, format="%.2f")
@@ -902,26 +914,31 @@ def get_match_odds(sel_code, odds_api_key, hn, an, auto_odds,
                    match_date=None, af_key=None):
     """
     Oran çekme — öncelik sırası:
-    1. API-Football (key varsa) — gerçek bookmaker oranları
-    2. football-data.co.uk CSV — ücretsiz, key yok
+    1. The Odds API  (ücretsiz 500/ay, Bet365 dahil)
+    2. API-Football  (ücretsiz 100/gün)
+    3. football-data.co.uk CSV (ücretsiz, key yok)
+    4. SofaScore scraping (key gerektirmez)
     """
     if not auto_odds:
         return None
 
-    # ── 1. API-Football ──────────────────────────────────────────
+    # ── 1. The Odds API ──────────────────────────────────────────
+    if odds_api_key and odds_api_key.strip():
+        result = get_odds_api_odds(odds_api_key, sel_code, hn, an, match_date)
+        if result:
+            return result
+
+    # ── 2. API-Football ──────────────────────────────────────────
     if af_key and af_key.strip():
         af_league = FD_TO_AF_LEAGUE.get(sel_code)
         if af_league and match_date:
-            # Önce fixture ID bul
             cache_fid = f"af_fid_{sel_code}_{match_date}_{hn[:6]}"
             if cache_fid not in st.session_state:
                 fid = get_af_fixture_id(af_key, af_league, match_date, hn, an)
                 st.session_state[cache_fid] = fid
             else:
                 fid = st.session_state[cache_fid]
-
             if debug: st.caption(f"🐛 AF fixture_id={fid} | {hn} vs {an}")
-
             if fid:
                 cache_odds = f"af_odds_{fid}"
                 if cache_odds not in st.session_state:
@@ -932,7 +949,7 @@ def get_match_odds(sel_code, odds_api_key, hn, an, auto_odds,
                 if result:
                     return result
 
-    # ── 2. football-data.co.uk CSV ───────────────────────────────
+    # ── 3. football-data.co.uk CSV ───────────────────────────────
     couk_code = FD_ORG_TO_COUK.get(sel_code)
     if couk_code:
         fo_key = f"fdcouk_{couk_code}"
@@ -941,15 +958,238 @@ def get_match_odds(sel_code, odds_api_key, hn, an, auto_odds,
             st.session_state[fo_key] = fo
         else:
             fo = st.session_state[fo_key]
-
         if debug:
             st.caption(f"🐛 fdcouk [{couk_code}] {len(fo)} maç bulundu")
-
         result = match_odds_to_fixture(fo, hn, an)
         if result:
             return result
 
+    # ── 4. SofaScore scraping ────────────────────────────────────
+    if match_date:
+        result = get_sofascore_odds(hn, an, match_date)
+        if result:
+            return result
+
     return None
+
+
+# ── THE ODDS API ─────────────────────────────────────────────────
+# https://the-odds-api.com — ücretsiz 500 istek/ay, kayıt gerekli
+# Bet365, Pinnacle, Unibet, William Hill dahil
+
+ODDS_API_BASE = "https://api.the-odds-api.com/v4"
+
+# football-data.org kod → The Odds API sport key
+FD_TO_ODDSAPI_SPORT = {
+    "PL":  "soccer_epl",
+    "ELC": "soccer_efl_champ",
+    "PD":  "soccer_spain_la_liga",
+    "BL1": "soccer_germany_bundesliga",
+    "SA":  "soccer_italy_serie_a",
+    "FL1": "soccer_france_ligue_one",
+    "DED": "soccer_netherlands_eredivisie",
+    "PPL": "soccer_portugal_primeira_liga",
+    "CL":  "soccer_uefa_champs_league",
+    "EL":  "soccer_uefa_europa_league",
+    "ECL": "soccer_uefa_europa_conference_league",
+    "BSA": "soccer_brazil_campeonato",
+}
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_odds_api(api_key, sport_key):
+    """The Odds API'den tüm maçların oranlarını çek."""
+    try:
+        r = requests.get(
+            f"{ODDS_API_BASE}/sports/{sport_key}/odds/",
+            params={
+                "apiKey":    api_key,
+                "regions":   "eu",
+                "markets":   "h2h",
+                "oddsFormat":"decimal",
+                "bookmakers":"bet365,pinnacle,unibet,williamhill,betfair",
+            },
+            timeout=15
+        )
+        if r.status_code == 200:
+            remaining = r.headers.get("x-requests-remaining","?")
+            if debug: st.caption(f"🐛 OddsAPI {sport_key} → {len(r.json())} maç | Kalan: {remaining}")
+            return r.json()
+        elif r.status_code == 401:
+            st.warning("⚠️ The Odds API key geçersiz — the-odds-api.com'dan kontrol edin")
+        elif r.status_code == 422:
+            st.warning(f"⚠️ The Odds API: bu lig desteklenmiyor ({sport_key})")
+        if debug: st.caption(f"🐛 OddsAPI HTTP {r.status_code}: {r.text[:100]}")
+        return []
+    except Exception as e:
+        if debug: st.caption(f"🐛 OddsAPI error: {e}")
+        return []
+
+def get_odds_api_odds(api_key, sel_code, hn, an, match_date):
+    """
+    The Odds API'den belirli maçın Bet365 oranlarını çek.
+    Bet365 yoksa Pinnacle, yoksa ilk bookmaker.
+    """
+    sport_key = FD_TO_ODDSAPI_SPORT.get(sel_code)
+    if not sport_key:
+        return None
+
+    cache_key = f"oddsapi_{sport_key}_{match_date or 'any'}"
+    if cache_key not in st.session_state:
+        data = fetch_odds_api(api_key, sport_key)
+        st.session_state[cache_key] = data
+    else:
+        data = st.session_state[cache_key]
+
+    if not data:
+        return None
+
+    # Maç tarihi filtresi (±1 gün tolerans)
+    import datetime as _dt
+    target_date = None
+    if match_date:
+        try:
+            target_date = _dt.datetime.strptime(match_date, "%Y-%m-%d").date()
+        except:
+            pass
+
+    # Takım adı eşleştir
+    for game in data:
+        gdate = game.get("commence_time","")[:10]
+        # Tarih filtresi
+        if target_date:
+            try:
+                gd = _dt.datetime.strptime(gdate, "%Y-%m-%d").date()
+                if abs((gd - target_date).days) > 1:
+                    continue
+            except:
+                pass
+
+        g_home = game.get("home_team","")
+        g_away = game.get("away_team","")
+        if not (fuzzy_match_team(g_home, hn) and fuzzy_match_team(g_away, an)):
+            continue
+
+        # Bookmaker öncelik: Bet365 → Pinnacle → Unibet → ilk
+        bookmakers = game.get("bookmakers",[])
+        def find_bm(name_frag):
+            return next((b for b in bookmakers if name_frag.lower() in b.get("key","").lower()), None)
+
+        bm = find_bm("bet365") or find_bm("pinnacle") or find_bm("unibet") or (bookmakers[0] if bookmakers else None)
+        if not bm:
+            continue
+
+        bm_name = bm.get("title", bm.get("key","?"))
+        o1 = ox = o2 = None
+        for market in bm.get("markets",[]):
+            if market.get("key") != "h2h":
+                continue
+            for outcome in market.get("outcomes",[]):
+                name  = outcome.get("name","")
+                price = _safe_float(outcome.get("price"))
+                if name == g_home:   o1 = price
+                elif name == g_away: o2 = price
+                else:                ox = price  # Draw
+
+        if o1 and ox and o2 and o1 > 1.0 and ox > 1.0 and o2 > 1.0:
+            if debug: st.caption(f"🐛 OddsAPI [{bm_name}] {g_home} vs {g_away}: 1={o1} X={ox} 2={o2}")
+            return {
+                "o1": round(o1,2), "ox": round(ox,2), "o2": round(o2,2),
+                "o25_ov": None, "o25_un": None,
+                "source": f"The Odds API ({bm_name})"
+            }
+
+    if debug: st.caption(f"🐛 OddsAPI: {hn} vs {an} bulunamadı ({sport_key})")
+    return None
+
+
+# ── SOFASCORE SCRAPING ────────────────────────────────────────────
+# Key gerektirmez — public API endpoint (mobil app verileri)
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_sofascore_odds(hn, an, match_date):
+    """
+    SofaScore public API'den maç oranları çek.
+    Format: /api/v1/sport/football/scheduled-events/YYYY-MM-DD
+    """
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+                          "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+            "Accept": "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.sofascore.com/",
+        }
+        # Günün tüm maçlarını çek
+        r = requests.get(
+            f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{match_date}",
+            headers=headers, timeout=12
+        )
+        if r.status_code != 200:
+            if debug: st.caption(f"🐛 SofaScore HTTP {r.status_code}")
+            return None
+
+        events = r.json().get("events", [])
+        if debug: st.caption(f"🐛 SofaScore {match_date}: {len(events)} maç")
+
+        # Maçı bul
+        target_id = None
+        for ev in events:
+            h_name = ev.get("homeTeam",{}).get("name","")
+            a_name = ev.get("awayTeam",{}).get("name","")
+            if fuzzy_match_team(h_name, hn) and fuzzy_match_team(a_name, an):
+                target_id = ev.get("id")
+                if debug: st.caption(f"🐛 SofaScore maç bulundu: {h_name} vs {a_name} id={target_id}")
+                break
+
+        if not target_id:
+            if debug: st.caption(f"🐛 SofaScore: {hn} vs {an} bulunamadı")
+            return None
+
+        # Maçın oranlarını çek
+        r2 = requests.get(
+            f"https://api.sofascore.com/api/v1/event/{target_id}/odds/1/all",
+            headers=headers, timeout=12
+        )
+        if r2.status_code != 200:
+            if debug: st.caption(f"🐛 SofaScore odds HTTP {r2.status_code}")
+            return None
+
+        odds_data = r2.json()
+        # market tipini bul: 1x2 (fulltime)
+        o1 = ox = o2 = None
+        markets = odds_data.get("markets", []) or odds_data.get("oddgroups", [])
+
+        # Yapı: markets[].choices[].name + fractionalValue/decimalValue
+        for market in markets:
+            mname = (market.get("marketName") or market.get("name") or "").lower()
+            if "1x2" not in mname and "full time" not in mname and "match winner" not in mname:
+                continue
+            choices = market.get("choices") or market.get("odds") or []
+            for ch in choices:
+                name  = (ch.get("name") or ch.get("choice") or "").strip()
+                val   = _safe_float(ch.get("decimalValue") or ch.get("decimal") or ch.get("odd"))
+                if not val or val <= 1.0:
+                    continue
+                if name in ("1", "Home"):    o1 = val
+                elif name in ("X", "Draw"): ox = val
+                elif name in ("2", "Away"): o2 = val
+            if o1 and ox and o2:
+                break
+
+        if o1 and ox and o2:
+            src = odds_data.get("provider",{}).get("name","SofaScore")
+            if debug: st.caption(f"🐛 SofaScore [{src}]: 1={o1} X={ox} 2={o2}")
+            return {
+                "o1": round(o1,2), "ox": round(ox,2), "o2": round(o2,2),
+                "o25_ov": None, "o25_un": None,
+                "source": f"SofaScore ({src})"
+            }
+        if debug: st.caption(f"🐛 SofaScore: oranlar parse edilemedi")
+        return None
+
+    except Exception as e:
+        if debug: st.caption(f"🐛 SofaScore error: {e}")
+        return None
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_season_csv(couk_code, season_code):
@@ -1613,12 +1853,15 @@ def render_odds_panel(oa, h, a, model_stats):
 
     # Kaynak banner
     if _is_est:
-        st.warning(f"⚠️ **Gerçek oran bulunamadı.** Bu oranlar Poisson model/AI tahminidir (`{_src}`). "
-                   f"Doğru analiz için API-Football key girin veya manuel oran girin.")
-    elif "Bet365" in _src:
-        st.success(f"✅ Oranlar: **Bet365** ({_src})")
+        st.warning(f"⚠️ **Gerçek oran bulunamadı** — `{_src}` kullanıldı. "
+                   f"Gerçek oran için: **The Odds API** key girin (the-odds-api.com, ücretsiz 500/ay) "
+                   f"veya **Manuel Oran Giriş**'i kullanın.")
+    elif "Bet365" in _src or "The Odds API" in _src:
+        st.success(f"✅ Gerçek oran: **{_src}**")
+    elif "SofaScore" in _src:
+        st.info(f"📊 Oran kaynağı: **{_src}**")
     elif "football-data" in _src:
-        st.info(f"📊 Oranlar: **football-data.co.uk** ({_src})")
+        st.info(f"📊 Oran kaynağı: **{_src}**")
     elif _src == "manuel":
         st.info("✏️ Oranlar: **Manuel girildi**")
 
