@@ -7,7 +7,8 @@ from datetime import date
 st.set_page_config(page_title="⚽ BetAnalyst Pro", page_icon="⚽",
                    layout="wide", initial_sidebar_state="expanded")
 
-FD_KEY   = "5cc88bf0dbac4fb699482886eb4c2270"
+FD_KEY          = "5cc88bf0dbac4fb699482886eb4c2270"
+AF_KEY_DEFAULT  = "b30caea6f2a4c305ff317308de0b917d"
 GROQ_KEY = "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"
 
 # ══════════════════════════════════════════════════════════════════
@@ -347,6 +348,7 @@ dashboard.api-football.com/register</a><br>
 </div>""", unsafe_allow_html=True)
     apifootball_key = st.text_input(
         "API-Football Key",
+        value=AF_KEY_DEFAULT,
         type="password",
         placeholder="dashboard.api-football.com → API Key",
         help="Ücretsiz: dashboard.api-football.com/register"
