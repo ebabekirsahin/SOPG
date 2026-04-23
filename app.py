@@ -3,7 +3,7 @@ import requests
 import math
 import time
 def _safe_minute(val, default=45):
-    """Parse a match minute safely — handles ?, empty, None, 45+2, etc."""
+    \"\"\"Parse a match minute safely — handles ?, empty, None, 45+2, etc.\"\"\"
     try:
         s = str(val).replace("'","").strip()
         # "45+2" → 47, "90+4" → 94
