@@ -603,11 +603,22 @@ def api_matches(code, dt, lim):
     return d.get("matches", [])[:lim]
 
 def api_team_matches(tid, n):
-    return fd_get(f"/teams/{tid}/matches",
-                  {"status": "FINISHED", "limit": n}).get("matches", [])
+    data = fd_get(
+        f"/teams/{tid}/matches",
+        {"status": "FINISHED", "limit": n}
+    )
+    matches = data.get("matches", [])
+    # Tarihe göre azalan sırala — en yeni maç öne gelsin
+    matches.sort(key=lambda m: m.get("utcDate", ""), reverse=True)
+    return matches[:n]
 
 def api_h2h(mid, n):
-    return fd_get(f"/matches/{mid}/head2head", {"limit": n}).get("matches", [])
+    data = fd_get(f"/matches/{mid}/head2head", {"limit": n})
+    matches = data.get("matches", [])
+    # Sadece biten maçları döndür, en yeni önce
+    finished = [m for m in matches if m.get("status") == "FINISHED"]
+    finished.sort(key=lambda m: m.get("utcDate", ""), reverse=True)
+    return finished[:n]
 
 def api_standings(code):
     try: return fd_get(f"/competitions/{code}/standings")["standings"][0]["table"]
@@ -1116,29 +1127,50 @@ def _calc_score_freq(score_pairs):
             for (h, a), cnt in sorted(c.items(), key=lambda x: -x[1])}
 
 def parse_form(matches, tid):
-    if not matches: return {}
+    if not matches:
+        return {}
     ms_r, ht_r = [], []
     gf, gc, htgf, htgc = [], [], [], []
-    h_gf=h_gc=h_n=a_gf=a_gc=a_n = 0
+    h_gf = h_gc = h_n = a_gf = a_gc = a_n = 0
+ 
     for m in matches:
+        # Status kontrolü — sadece biten maçları işle
+        if m.get("status") != "FINISHED":
+            continue
+ 
         hid = m["homeTeam"]["id"]
-        fh  = m["score"]["fullTime"]["home"]  or 0
-        fa  = m["score"]["fullTime"]["away"]  or 0
-        hh  = (m["score"].get("halfTime") or {}).get("home") or 0
-        ha  = (m["score"].get("halfTime") or {}).get("away") or 0
+ 
+        # fullTime — None guard
+        ft   = m.get("score", {}).get("fullTime") or {}
+        fh   = ft.get("home") or 0
+        fa   = ft.get("away") or 0
+ 
+        # halfTime — None guard (fix: None olduğunda 0 kullan)
+        ht_score = m.get("score", {}).get("halfTime") or {}
+        hh = ht_score.get("home") or 0
+        ha = ht_score.get("away") or 0
+ 
+        # None → int dönüşümü
+        fh = int(fh); fa = int(fa)
+        hh = int(hh); ha = int(ha)
+ 
         if hid == tid:
-            my_f,op_f,my_h,op_h = fh,fa,hh,ha
-            h_gf+=fh; h_gc+=fa; h_n+=1
+            my_f, op_f, my_h, op_h = fh, fa, hh, ha
+            h_gf += fh; h_gc += fa; h_n += 1
         else:
-            my_f,op_f,my_h,op_h = fa,fh,ha,hh
-            a_gf+=fa; a_gc+=fh; a_n+=1
-        ms_r.append("G" if my_f>op_f else "B" if my_f==op_f else "M")
-        ht_r.append("G" if my_h>op_h else "B" if my_h==op_h else "M")
-        gf.append(my_f); gc.append(op_f)
+            my_f, op_f, my_h, op_h = fa, fh, ha, hh
+            a_gf += fa; a_gc += fh; a_n += 1
+ 
+        ms_r.append("G" if my_f > op_f else "B" if my_f == op_f else "M")
+        ht_r.append("G" if my_h > op_h else "B" if my_h == op_h else "M")
+        gf.append(my_f);   gc.append(op_f)
         htgf.append(my_h); htgc.append(op_h)
+ 
     n = len(ms_r)
-    if n == 0: return {}
-    pts5   = sum({"G":3,"B":1,"M":0}[r] for r in ms_r[:5])
+    if n == 0:
+        return {}
+ 
+    pts5  = sum({"G": 3, "B": 1, "M": 0}[r] for r in ms_r[:5])
     tot_gf = sum(gf); tot_ht = sum(htgf)
     ht_pct = round(tot_ht / tot_gf * 100, 1) if tot_gf > 0 else 45.0
     st_gf  = [f - h for f, h in zip(gf, htgf)]
@@ -1147,89 +1179,106 @@ def parse_form(matches, tid):
     for r in ms_r:
         if r == sr: sn += 1
         else: break
+ 
     return {
         "n": n,
         "form_list": ms_r[:8],
         "form_str":  "-".join(ms_r[:6]),
         "ht_form":   "-".join(ht_r[:5]),
-        "pts5": pts5, "pts_pct": round(pts5/15*100, 1),
-        "avg_gf":  round(sum(gf)/n, 2),   "avg_gc":  round(sum(gc)/n, 2),
-        "ht_avg_gf": round(sum(htgf)/n,2),"ht_avg_gc": round(sum(htgc)/n,2),
-        "st_avg_gf": round(sum(st_gf)/n,2),"st_avg_gc": round(sum(st_gc)/n,2),
-        "ht_pct": ht_pct, "st_pct": round(100-ht_pct,1),
-        "h_avg_gf": round(h_gf/h_n,2) if h_n else 0,
-        "h_avg_gc": round(h_gc/h_n,2) if h_n else 0, "h_n": h_n,
-        "a_avg_gf": round(a_gf/a_n,2) if a_n else 0,
-        "a_avg_gc": round(a_gc/a_n,2) if a_n else 0, "a_n": a_n,
-        "btts":  sum(1 for f,c in zip(gf,gc) if f>0 and c>0),
-        "o25":   sum(1 for f,c in zip(gf,gc) if f+c>2),
-        "o35":   sum(1 for f,c in zip(gf,gc) if f+c>3),
-        "cs":    sum(1 for c in gc if c==0),
-        "fts":   sum(1 for f in gf if f==0),
-        "streak": f"{sn} {'galibiyet' if sr=='G' else 'beraberlik' if sr=='B' else 'mağlubiyet'} serisi",
-        "ms_scores": [f"{f}-{c}" for f,c in zip(gf[:6],gc[:6])],
-        "ht_scores": [f"{h}-{a}" for h,a in zip(htgf[:6],htgc[:6])],
-        # Gerçek İY skor frekansları (hangi skor kaç kez çıktı)
+        "pts5": pts5, "pts_pct": round(pts5 / 15 * 100, 1),
+        "avg_gf":  round(sum(gf) / n, 2),    "avg_gc":  round(sum(gc) / n, 2),
+        "ht_avg_gf": round(sum(htgf) / n, 2), "ht_avg_gc": round(sum(htgc) / n, 2),
+        "st_avg_gf": round(sum(st_gf) / n, 2),"st_avg_gc": round(sum(st_gc) / n, 2),
+        "ht_pct": ht_pct, "st_pct": round(100 - ht_pct, 1),
+        "h_avg_gf": round(h_gf / h_n, 2) if h_n else 0,
+        "h_avg_gc": round(h_gc / h_n, 2) if h_n else 0, "h_n": h_n,
+        "a_avg_gf": round(a_gf / a_n, 2) if a_n else 0,
+        "a_avg_gc": round(a_gc / a_n, 2) if a_n else 0, "a_n": a_n,
+        "btts":  sum(1 for f, c in zip(gf, gc) if f > 0 and c > 0),
+        "o25":   sum(1 for f, c in zip(gf, gc) if f + c > 2),
+        "o35":   sum(1 for f, c in zip(gf, gc) if f + c > 3),
+        "cs":    sum(1 for c in gc if c == 0),
+        "fts":   sum(1 for f in gf if f == 0),
+        "streak": f"{sn} {'galibiyet' if sr == 'G' else 'beraberlik' if sr == 'B' else 'mağlubiyet'} serisi",
+        "ms_scores": [f"{f}-{c}" for f, c in zip(gf[:6], gc[:6])],
+        "ht_scores": [f"{h}-{a}" for h, a in zip(htgf[:6], htgc[:6])],
         "ht_score_freq": _calc_score_freq(list(zip(htgf, htgc))),
-        # Gerçek MS skor frekansları
         "ms_score_freq": _calc_score_freq(list(zip(gf, gc))),
     }
 
 def parse_h2h(matches, home_id):
-    if not matches: return {}
-    hw=aw=dr=ht_hw=ht_aw=ht_dr=rev21=rev12=revx1=revx2=btts=o25 = 0
+    """
+    home_id: mevcut maçın ev sahibi takım ID'si.
+    H2H maçlarında bu takım bazen ev, bazen deplasman olabilir.
+    Her maçta home_id'nin bakış açısından skor hesaplanır.
+    """
+    if not matches:
+        return {}
+ 
+    hw = aw = dr = ht_hw = ht_aw = ht_dr = 0
+    rev21 = rev12 = revx1 = revx2 = btts = o25 = 0
     gl, ms_sc, ht_sc = [], [], []
+ 
     for m in matches:
+        if m.get("status") != "FINISHED":
+            continue
+ 
         hid = m["homeTeam"]["id"]
-        fh  = m["score"]["fullTime"]["home"] or 0
-        fa  = m["score"]["fullTime"]["away"] or 0
-        hh  = (m["score"].get("halfTime") or {}).get("home") or 0
-        ha  = (m["score"].get("halfTime") or {}).get("away") or 0
-        if hid == home_id: my_f,op_f,my_h,op_h = fh,fa,hh,ha
-        else:              my_f,op_f,my_h,op_h = fa,fh,ha,hh
-        if my_f>op_f: hw+=1
-        elif my_f<op_f: aw+=1
-        else: dr+=1
-        if my_h>op_h: ht_hw+=1
-        elif my_h<op_h: ht_aw+=1
-        else: ht_dr+=1
-        if my_h<op_h and my_f>op_f: rev21+=1
-        if my_h>op_h and my_f<op_f: rev12+=1
-        if my_h==op_h and my_f>op_f: revx1+=1
-        if my_h==op_h and my_f<op_f: revx2+=1
-        if my_f>0 and op_f>0: btts+=1
-        if my_f+op_f>2: o25+=1
-        gl.append(my_f+op_f)
+ 
+        ft = m.get("score", {}).get("fullTime") or {}
+        fh = int(ft.get("home") or 0)
+        fa = int(ft.get("away") or 0)
+ 
+        ht_score = m.get("score", {}).get("halfTime") or {}
+        hh = int(ht_score.get("home") or 0)
+        ha = int(ht_score.get("away") or 0)
+ 
+        # home_id bu maçta ev sahibi mi deplasman mı?
+        if hid == home_id:
+            my_f, op_f, my_h, op_h = fh, fa, hh, ha
+        else:
+            my_f, op_f, my_h, op_h = fa, fh, ha, hh
+ 
+        if my_f > op_f:   hw += 1
+        elif my_f < op_f: aw += 1
+        else:             dr += 1
+ 
+        if my_h > op_h:   ht_hw += 1
+        elif my_h < op_h: ht_aw += 1
+        else:             ht_dr += 1
+ 
+        # Dönüş tipleri
+        if my_h < op_h and my_f > op_f: rev21 += 1
+        if my_h > op_h and my_f < op_f: rev12 += 1
+        if my_h == op_h and my_f > op_f: revx1 += 1
+        if my_h == op_h and my_f < op_f: revx2 += 1
+ 
+        if my_f > 0 and op_f > 0: btts += 1
+        if my_f + op_f > 2:       o25  += 1
+ 
+        gl.append(my_f + op_f)
         ms_sc.append(f"{my_f}-{op_f}")
         ht_sc.append(f"{my_h}-{op_h}")
-    n = len(matches)
-    p = lambda x: round(x/n*100, 1)
+ 
+    n = len(gl)
+    if n == 0:
+        return {}
+ 
+    p = lambda x: round(x / n * 100, 1)
     return {
-        "n":n, "hw":hw,"dr":dr,"aw":aw,
-        "hw_pct":p(hw),"dr_pct":p(dr),"aw_pct":p(aw),
-        "ht_hw":ht_hw,"ht_dr":ht_dr,"ht_aw":ht_aw,
-        "ht_hw_pct":p(ht_hw),"ht_dr_pct":p(ht_dr),"ht_aw_pct":p(ht_aw),
-        "rev21":rev21,"rev21_pct":p(rev21),
-        "rev12":rev12,"rev12_pct":p(rev12),
-        "revx1":revx1,"revx1_pct":p(revx1),
-        "revx2":revx2,"revx2_pct":p(revx2),
-        "avg_goals":round(sum(gl)/n,2) if n else 0,
-        "o25":o25,"o25_pct":p(o25),
-        "btts":btts,"btts_pct":p(btts),
-        "ms_scores":ms_sc,"ht_scores":ht_sc,
+        "n": n, "hw": hw, "dr": dr, "aw": aw,
+        "hw_pct": p(hw), "dr_pct": p(dr), "aw_pct": p(aw),
+        "ht_hw": ht_hw, "ht_dr": ht_dr, "ht_aw": ht_aw,
+        "ht_hw_pct": p(ht_hw), "ht_dr_pct": p(ht_dr), "ht_aw_pct": p(ht_aw),
+        "rev21": rev21, "rev21_pct": p(rev21),
+        "rev12": rev12, "rev12_pct": p(rev12),
+        "revx1": revx1, "revx1_pct": p(revx1),
+        "revx2": revx2, "revx2_pct": p(revx2),
+        "avg_goals": round(sum(gl) / n, 2) if n else 0,
+        "o25": o25, "o25_pct": p(o25),
+        "btts": btts, "btts_pct": p(btts),
+        "ms_scores": ms_sc, "ht_scores": ht_sc,
     }
-
-def find_standing(table, tid):
-    for r in table:
-        if r.get("team",{}).get("id") == tid: return r
-    return {}
-
-def find_scorer(scorers, tid):
-    for s in scorers:
-        if s.get("team",{}).get("id") == tid:
-            p = s.get("player",{})
-            return {"name":p.get("name","?"),"goals":s.get("goals",0),"assists":s.get("assists",0)}
-    return {}
 
 # ══════════════════════════════════════════════════════════════════
 # POISSON
@@ -3879,148 +3928,126 @@ def render_vs_ui(match, hf, af, h2h, hxg, axg, h_htxg, a_htxg,
     # ── 11b. GERÇEK VERİYE DAYALI SKOR TABLOSU ──────────────
     # İY skorları: Poisson + gerçek frekans birleşimi
     def _build_iy_scores(hform, aform, ht_top):
-        """
-        İY skor listesi oluştur:
-        1. Her iki takımın gerçek İY skor frekansları → Poisson ağırlıklı birleştir
-        2. Sadece xG ile uyumlu makul skorlar (takımların İY gol ort'una yakın)
-        """
-        from collections import defaultdict
-        h_htxg = hform.get("ht_avg_gf", 0.5) if hform else 0.5
-        a_htxg = aform.get("ht_avg_gf", 0.5) if aform else 0.5
-
-        # Gerçek frekans verileri
-        h_ht_freq = hform.get("ht_score_freq", {}) if hform else {}
-        a_ht_freq = aform.get("ht_score_freq", {}) if aform else {}
-
-        # Poisson top İY skorları (zaten hesaplanmış)
-        scores = {}
-        for (hg, ag), prob in ht_top[:12]:
-            scores[f"{hg}-{ag}"] = {"pct": round(prob, 1), "sources": ["model"]}
-
-        # Gerçek frekans: ev sahibi için (kendi attığı = hg, yediği = ag)
-        for sc, info in h_ht_freq.items():
-            if sc in scores:
-                # Model ile gerçek frekansı ağırlıkla
-                combined = round(scores[sc]["pct"] * 0.55 + info["pct"] * 0.45, 1)
-                scores[sc] = {"pct": combined, "sources": ["model", "ev_form"],
-                              "why": f"Ev {info['count']}x gerçekte çıktı"}
+    from collections import defaultdict
+ 
+    h_htxg = hform.get("ht_avg_gf", 0.5) if hform else 0.5
+    a_htxg = aform.get("ht_avg_gf", 0.5) if aform else 0.5
+    h_n    = hform.get("n", 1) if hform else 1
+    a_n    = aform.get("n", 1) if aform else 1
+ 
+    h_ht_freq = hform.get("ht_score_freq", {}) if hform else {}
+    a_ht_freq = aform.get("ht_score_freq", {}) if aform else {}
+ 
+    # Dinamik ağırlık — maç sayısı arttıkça form daha güvenilir
+    def form_weight(n_matches):
+        """n≤5 → 0.20, n=8 → 0.30, n≥12 → 0.40 max"""
+        return min(0.40, max(0.20, n_matches / 30))
+ 
+    h_fw = form_weight(h_n)
+    a_fw = form_weight(a_n)
+    poi_w = 1.0 - (h_fw + a_fw) / 2   # Poisson ağırlığı her zaman ≥ 0.60
+ 
+    # Poisson skorları temel al
+    scores = {}
+    for (hg, ag), prob in ht_top[:12]:
+        scores[f"{hg}-{ag}"] = {"pct": round(prob, 1), "why": ""}
+ 
+    # Ev sahibi form frekansı — min 2 kez çıkmış olmalı
+    for sc, info in h_ht_freq.items():
+        if info.get("count", 0) < 2:
+            continue
+        if sc in scores:
+            combined = round(scores[sc]["pct"] * (1 - h_fw) + info["pct"] * h_fw, 1)
+            scores[sc] = {"pct": combined, "why": f"Ev {info['count']}x"}
+        else:
+            scores[sc] = {"pct": round(info["pct"] * h_fw, 1),
+                          "why": f"Ev {info['count']}x"}
+ 
+    # Deplasman form frekansı — perspektif çevir, min 2 kez
+    for sc, info in a_ht_freq.items():
+        if info.get("count", 0) < 2:
+            continue
+        parts = sc.split("-")
+        if len(parts) == 2:
+            rev_sc = f"{parts[1]}-{parts[0]}"
+            if rev_sc in scores:
+                combined = round(scores[rev_sc]["pct"] * (1 - a_fw) + info["pct"] * a_fw, 1)
+                old_why  = scores[rev_sc].get("why", "")
+                scores[rev_sc] = {"pct": combined,
+                                  "why": f"{old_why} | Dep {info['count']}x".strip(" |")}
             else:
-                scores[sc] = {"pct": round(info["pct"] * 0.45, 1),
-                              "sources": ["ev_form"],
-                              "why": f"Ev {info['count']}x gerçekte çıktı"}
-
-        # Gerçek frekans: deplasman için (attığı = ag, yediği = hg — ters çevir)
-        for sc, info in a_ht_freq.items():
-            parts = sc.split("-")
-            if len(parts) == 2:
-                rev_sc = f"{parts[1]}-{parts[0]}"  # deplasman perspektifinden ev-dep'e çevir
-                if rev_sc in scores:
-                    combined = round(scores[rev_sc]["pct"] * 0.55 + info["pct"] * 0.45, 1)
-                    old_why = scores[rev_sc].get("why","")
-                    scores[rev_sc] = {"pct": combined, "sources": scores[rev_sc]["sources"] + ["dep_form"],
-                                      "why": f"{old_why} | Dep {info['count']}x".strip(" |")}
-                else:
-                    scores[rev_sc] = {"pct": round(info["pct"] * 0.40, 1),
-                                      "sources": ["dep_form"],
-                                      "why": f"Dep {info['count']}x gerçekte çıktı"}
-
-        # Makulsüz skorları filtrele (xG'den çok uzak olanları düşür)
-        filtered = {}
-        for sc, info in scores.items():
-            parts = sc.split("-")
-            if len(parts) != 2: continue
-            try:
-                hg, ag = int(parts[0]), int(parts[1])
-            except: continue
-            # İY'de 3+ gol çok nadir — sadece yüksek xG varsa göster
-            if hg + ag >= 3 and h_htxg + a_htxg < 1.5:
-                continue
-            # Her iki takım da 0'dan fazla atacaksa xG desteği gerek
-            if hg > 0 and ag > 0 and h_htxg < 0.3 and a_htxg < 0.3:
-                continue
-            filtered[sc] = info
-
-        # Sırala ve en iyi 6 döndür
-        sorted_scores = sorted(filtered.items(), key=lambda x: -x[1]["pct"])
-        return [{"score": sc, "pct": str(info["pct"]), "why": info.get("why","")}
-                for sc, info in sorted_scores[:6] if info["pct"] >= 0.5]
-
-    def _build_ms_scores(hform, aform, ms_top):
-        """MS skor listesi: Poisson + gerçek frekans birleşimi"""
-        h_avg_gf = hform.get("avg_gf", 1.2) if hform else 1.2
-        a_avg_gf = aform.get("avg_gf", 1.0) if aform else 1.0
-        h_ms_freq = hform.get("ms_score_freq", {}) if hform else {}
-        a_ms_freq = aform.get("ms_score_freq", {}) if aform else {}
-
-        scores = {}
-        for (hg, ag), prob in ms_top[:12]:
-            scores[f"{hg}-{ag}"] = {"pct": round(prob, 1), "why": ""}
-
-        for sc, info in h_ms_freq.items():
-            if sc in scores:
-                combined = round(scores[sc]["pct"] * 0.5 + info["pct"] * 0.5, 1)
-                scores[sc] = {"pct": combined, "why": f"Ev {info['count']}x"}
+                scores[rev_sc] = {"pct": round(info["pct"] * a_fw, 1),
+                                  "why": f"Dep {info['count']}x"}
+ 
+    # Makulsüz filtrele
+    filtered = {}
+    for sc, info in scores.items():
+        parts = sc.split("-")
+        if len(parts) != 2:
+            continue
+        try:
+            hg, ag = int(parts[0]), int(parts[1])
+        except:
+            continue
+        if hg + ag >= 3 and h_htxg + a_htxg < 1.5:
+            continue
+        if hg > 0 and ag > 0 and h_htxg < 0.3 and a_htxg < 0.3:
+            continue
+        filtered[sc] = info
+ 
+    sorted_scores = sorted(filtered.items(), key=lambda x: -x[1]["pct"])
+    return [{"score": sc, "pct": str(info["pct"]), "why": info.get("why", "")}
+            for sc, info in sorted_scores[:6] if info["pct"] >= 0.5]
+ 
+ 
+def _build_ms_scores(hform, aform, ms_top):
+    h_avg_gf = hform.get("avg_gf", 1.2) if hform else 1.2
+    a_avg_gf = aform.get("avg_gf", 1.0) if aform else 1.0
+    h_n      = hform.get("n", 1) if hform else 1
+    a_n      = aform.get("n", 1) if aform else 1
+ 
+    h_ms_freq = hform.get("ms_score_freq", {}) if hform else {}
+    a_ms_freq = aform.get("ms_score_freq", {}) if aform else {}
+ 
+    def form_weight(n_matches):
+        return min(0.40, max(0.20, n_matches / 30))
+ 
+    h_fw = form_weight(h_n)
+    a_fw = form_weight(a_n)
+ 
+    scores = {}
+    for (hg, ag), prob in ms_top[:12]:
+        scores[f"{hg}-{ag}"] = {"pct": round(prob, 1), "why": ""}
+ 
+    # Min 2 kez çıkmış form skorları
+    for sc, info in h_ms_freq.items():
+        if info.get("count", 0) < 2:
+            continue
+        if sc in scores:
+            combined = round(scores[sc]["pct"] * (1 - h_fw) + info["pct"] * h_fw, 1)
+            scores[sc] = {"pct": combined, "why": f"Ev {info['count']}x"}
+        elif info["pct"] >= 5:
+            scores[sc] = {"pct": round(info["pct"] * h_fw, 1),
+                          "why": f"Ev {info['count']}x"}
+ 
+    for sc, info in a_ms_freq.items():
+        if info.get("count", 0) < 2:
+            continue
+        parts = sc.split("-")
+        if len(parts) == 2:
+            rev_sc = f"{parts[1]}-{parts[0]}"
+            if rev_sc in scores:
+                old = scores[rev_sc]
+                combined = round(old["pct"] * (1 - a_fw) + info["pct"] * a_fw, 1)
+                scores[rev_sc] = {"pct": combined,
+                                  "why": f"{old.get('why','')} Dep {info['count']}x".strip()}
             elif info["pct"] >= 5:
-                scores[sc] = {"pct": round(info["pct"] * 0.45, 1), "why": f"Ev {info['count']}x"}
-
-        for sc, info in a_ms_freq.items():
-            parts = sc.split("-")
-            if len(parts) == 2:
-                rev_sc = f"{parts[1]}-{parts[0]}"
-                if rev_sc in scores:
-                    old = scores[rev_sc]
-                    combined = round(old["pct"] * 0.5 + info["pct"] * 0.5, 1)
-                    scores[rev_sc] = {"pct": combined,
-                                      "why": f"{old.get('why','')} Dep {info['count']}x".strip()}
-                elif info["pct"] >= 5:
-                    scores[rev_sc] = {"pct": round(info["pct"] * 0.40, 1),
-                                      "why": f"Dep {info['count']}x"}
-
-        sorted_s = sorted(scores.items(), key=lambda x: -x[1]["pct"])
-        return [{"score": sc, "pct": str(round(info["pct"],1)), "why": info.get("why","")}
-                for sc, info in sorted_s[:8] if info["pct"] >= 1.0]
-
-    iy_src = _build_iy_scores(hf, af, top_ht)
-    ms_src = _build_ms_scores(hf, af, top_ms)
-
-    if iy_src or ms_src:
-        def _score_item(score, pct, why, bg, border, score_color, pct_color):
-            why_div = (f'<div style="font-size:.6rem;color:#3a2a6e;margin-top:1px">{why[:40]}</div>'
-                       if why else "")
-            mono = "JetBrains Mono,monospace"
-            return (
-                f'<div style="display:flex;justify-content:space-between;align-items:center;'
-                f'padding:6px 10px;margin:4px 0;background:{bg};border:1px solid {border};border-radius:8px">'
-                f'<div style="font-size:1.05rem;font-weight:800;color:{score_color};font-family:{mono}">'
-                f'{score}</div>'
-                f'<div style="text-align:right">'
-                f'<div style="font-size:.85rem;font-weight:700;color:{pct_color};font-family:{mono}">%{pct}</div>'
-                f'{why_div}</div></div>'
-            )
-
-        iy_items_html = "".join(_score_item(it["score"],it["pct"],it.get("why",""),"#0d0a1a","#2d1d5e","#c4b5fd","#a78bfa") for it in iy_src[:6])
-        ms_items_html = "".join(_score_item(it["score"],it["pct"],it.get("why",""),"#040f09","#0d3320","#34d399","#6ee7b7") for it in ms_src[:8])
-
-        spec_html = (
-            '<div style="padding:1.2rem 1.8rem;border-bottom:1px solid #0a1e30">'
-            '<div class="dp-section-title">📐 SKOR ANALİZİ — Gerçek Form + Poisson Modeli</div>'
-            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:8px">'
-            '<div>'
-            '<div style="font-size:.65rem;color:#6d28d9;font-weight:700;letter-spacing:.1em;'
-            'text-transform:uppercase;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #1a0a3c">'
-            '🕐 İLK YARI SKOR TAHMİNLERİ (Form + Model)</div>'
-            + iy_items_html +
-            '</div>'
-            '<div>'
-            '<div style="font-size:.65rem;color:#059669;font-weight:700;letter-spacing:.1em;'
-            'text-transform:uppercase;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #052e16">'
-            '🏁 MAÇ SONU SKOR TAHMİNLERİ (Form + Model)</div>'
-            + ms_items_html +
-            '</div>'
-            '</div>'
-            '</div>'
-        )
-        st.markdown(spec_html, unsafe_allow_html=True)
+                scores[rev_sc] = {"pct": round(info["pct"] * a_fw, 1),
+                                  "why": f"Dep {info['count']}x"}
+ 
+    sorted_s = sorted(scores.items(), key=lambda x: -x[1]["pct"])
+    return [{"score": sc, "pct": str(round(info["pct"], 1)), "why": info.get("why", "")}
+            for sc, info in sorted_s[:8] if info["pct"] >= 1.0]
 
     # ── 12. TAVSİYELER ────────────────────────────────────────
     banko  = preds.get("BANKO","")
