@@ -41,8 +41,10 @@ def calc_live_minute(m):
 
     if elapsed <= 45:
         return max(1, elapsed)          # 1Y: 1–45
-    elif elapsed <= 60:
-        return 45                       # Devre arası (45+15dk)
+    elif elapsed <= 50 and status == "IN_PLAY":
+        return elapsed                  # 1Y uzatma (45+1..45+5) — hâlâ oynanıyor, 45'te donmasın
+    elif elapsed <= 65:
+        return 45                       # Devre arası (~15dk mola)
     else:
         minute = elapsed - 15           # 2Y: devre arası 15dk
         return max(46, min(90, minute))
@@ -53,10 +55,23 @@ from datetime import date
 st.set_page_config(page_title="⚽ BetAnalyst Pro", page_icon="⚽",
                    layout="wide", initial_sidebar_state="expanded")
 
-FD_KEY          = "5cc88bf0dbac4fb699482886eb4c2270"
-AF_KEY_DEFAULT  = "b30caea6f2a4c305ff317308de0b917d"
-GROQ_KEY = "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"
-ODDS_API_KEY_DEFAULT = "4d4d08c88873623761e05df66d0aeb07"
+import os
+
+def _get_secret(name, env_fallback=None):
+    """Streamlit secrets first, then env var. Never a hardcoded literal in source."""
+    try:
+        if name in st.secrets:
+            return st.secrets[name]
+    except Exception:
+        pass
+    return os.environ.get(env_fallback or name)
+
+FD_KEY               = _get_secret("FD_KEY", "FOOTBALL_DATA_KEY")
+AF_KEY_DEFAULT        = _get_secret("AF_KEY", "API_FOOTBALL_KEY")
+GROQ_KEY              = _get_secret("GROQ_KEY", "GROQ_API_KEY")
+ODDS_API_KEY_DEFAULT  = _get_secret("ODDS_API_KEY", "THE_ODDS_API_KEY")
+
+_REQUIRED_MISSING = [n for n, v in {"FD_KEY": FD_KEY, "GROQ_KEY": GROQ_KEY}.items() if not v]
 
 # ══════════════════════════════════════════════════════════════════
 # CSS
@@ -441,7 +456,17 @@ st.markdown("""
 # ══════════════════════════════════════════════════════════════════
 with st.sidebar:
     st.markdown("## ⚙️ Filtreler")
-    st.success("✅ API key'ler hazır")
+    if _REQUIRED_MISSING:
+        st.error(f"❌ Eksik zorunlu key: {', '.join(_REQUIRED_MISSING)}\n\n"
+                 f".streamlit/secrets.toml dosyasına ekleyin (bkz. dosya sonundaki not).")
+        st.stop()
+    else:
+        st.success("✅ Zorunlu key'ler yüklendi (football-data.org · Groq)")
+    if not AF_KEY_DEFAULT:
+        st.caption("⚠️ API-Football key yok — yedek oran kaynağı devre dışı")
+    if not ODDS_API_KEY_DEFAULT:
+        st.caption("⚠️ The Odds API key yok — gerçek bookmaker oranı çekilemez, "
+                    "sistem bunu 'ORAN BULUNAMADI' olarak işaretler (uydurmaz)")
 
     # ── MOD SEÇİMİ ──
     app_mode = st.radio(
@@ -1807,13 +1832,22 @@ def fuzzy_match_team(name1, name2):
 
     n1, n2 = norm(name1), norm(name2)
     if n1 == n2: return True
-    if len(n1) >= 4 and n1 in n2: return True
-    if len(n2) >= 4 and n2 in n1: return True
-    if len(n1) >= 4 and len(n2) >= 4 and n1[:4] == n2[:4]: return True
-    w1 = set(n1.split())
-    w2 = set(n2.split())
-    common = w1 & w2
-    if common and max(len(w) for w in common) >= 4: return True
+
+    # Substring match is only safe if the names are close in length —
+    # otherwise "inter" matches "inter miami", "real" matches "real sociedad"
+    # and odds get attached to the wrong fixture.
+    if len(n1) >= 4 and n1 in n2 and len(n2) - len(n1) <= 4: return True
+    if len(n2) >= 4 and n2 in n1 and len(n1) - len(n2) <= 4: return True
+
+    # Word-overlap: ALL significant (len>=4) words of the SHORTER name
+    # must appear in the longer name's word set — not just one shared word.
+    w1 = [w for w in n1.split() if len(w) >= 4]
+    w2 = [w for w in n2.split() if len(w) >= 4]
+    if w1 and w2:
+        shorter, longer = (set(w1), set(w2)) if len(w1) <= len(w2) else (set(w2), set(w1))
+        if shorter and shorter.issubset(longer):
+            return True
+
     return False
 
 def match_odds_to_fixture(fixtures_odds, h_name, a_name):
@@ -1933,9 +1967,38 @@ def analyze_score_patterns(matched_rows, o1, ox, o2):
         "imp_h": imp_h,
     }
 
+def odds_provenance(odds_source: str):
+    """
+    Single source of truth for 'is this a real bookmaker odd or a model
+    estimate?' — used everywhere odds are labeled (pattern panel, odds
+    panel, match-list chip) so the real/estimated distinction can never
+    drift out of sync between UI locations again.
+    """
+    s = (odds_source or "").lower()
+    if "bet365" in s:
+        return {"cls": "bet365", "icon": "🔵 Bet365", "is_real": True, "label": "GERÇEK ORAN"}
+    if "the odds api" in s or "pinnacle" in s or "unibet" in s or "williamhill" in s:
+        return {"cls": "bet365", "icon": f"🟢 {odds_source[:24]}", "is_real": True, "label": "GERÇEK ORAN"}
+    if "football-data.co.uk" in s:
+        return {"cls": "bet365", "icon": f"📊 {odds_source[:24]}", "is_real": True, "label": "GERÇEK ORAN"}
+    if "sofascore" in s:
+        return {"cls": "", "icon": f"📊 {odds_source[:24]}", "is_real": True, "label": "GERÇEK ORAN"}
+    if s == "manuel":
+        return {"cls": "", "icon": "✏️ Manuel Giriş", "is_real": True, "label": "MANUEL"}
+    if "groq" in s or "model" in s:
+        return {"cls": "", "icon": "⚠️ MODEL TAHMİNİ", "is_real": False, "label": "ORAN BULUNAMADI — TAHMİN"}
+    return {"cls": "", "icon": "⚠️ KAYNAK YOK", "is_real": False, "label": "ORAN BULUNAMADI"}
+
+
 def render_pattern_panel(pattern, o1, ox, o2, h, a, odds_source="football-data.co.uk"):
     if not pattern:
         st.info("Bu oran aralığı için yeterli geçmiş maç bulunamadı.")
+        return
+
+    prov = odds_provenance(odds_source)
+    if not prov["is_real"]:
+        st.warning("⚠️ Bu maç için gerçek bookmaker oranı yok — oran-pattern analizi "
+                   "model tahmini üzerinden yapılamaz, bu bölüm atlandı.")
         return
 
     n   = pattern["n"]
@@ -1943,9 +2006,8 @@ def render_pattern_panel(pattern, o1, ox, o2, h, a, odds_source="football-data.c
     htr = pattern["htr_pct"]
     mono = "JetBrains Mono,monospace"
 
-    is_b365 = "bet365" in odds_source.lower() or "Bet365" in odds_source
-    src_cls  = "bet365" if is_b365 else ""
-    src_icon = "🔵 Bet365" if is_b365 else f"📊 {odds_source[:20]}"
+    src_cls  = prov["cls"]
+    src_icon = f'{prov["icon"]} · {prov["label"]}'
 
     header_html = (
         f'<div class="pattern-wrap">'
@@ -2299,20 +2361,15 @@ def render_odds_panel(oa, h, a, model_stats):
     imp   = oa["imp"]
     mono  = "JetBrains Mono,monospace"
     _src  = oa.get("_source", "")
-    _is_est = "groq" in _src.lower() or "model" in _src.lower()
+    _prov = odds_provenance(_src)
+    _is_est = not _prov["is_real"]
 
     if _is_est:
-        st.warning(f"⚠️ **Gerçek oran bulunamadı** — `{_src}` kullanıldı. "
-                   f"Gerçek oran için: **The Odds API** key girin (the-odds-api.com, ücretsiz 500/ay) "
-                   f"veya **Manuel Oran Giriş**'i kullanın.")
-    elif "Bet365" in _src or "The Odds API" in _src:
-        st.success(f"✅ Gerçek oran: **{_src}**")
-    elif "SofaScore" in _src:
-        st.info(f"📊 Oran kaynağı: **{_src}**")
-    elif "football-data" in _src:
-        st.info(f"📊 Oran kaynağı: **{_src}**")
-    elif _src == "manuel":
-        st.info("✏️ Oranlar: **Manuel girildi**")
+        st.warning(f"⚠️ **ORAN BULUNAMADI** — gösterilen oran `{_src}` kaynaklı bir MODEL TAHMİNİDİR, "
+                   f"gerçek bookmaker oranı değildir. Gerçek oran için: **The Odds API** key girin "
+                   f"(the-odds-api.com, ücretsiz 500/ay) veya **Manuel Oran Giriş**'i kullanın.")
+    else:
+        st.success(f"✅ {_prov['label']}: **{_prov['icon']}** ({_src})")
 
     risk_color = {"DÜŞÜK":"#3ecf7a","ORTA-DÜŞÜK":"#86efac","ORTA":"#f5a623",
                   "YÜKSEK":"#f87171","BİLİNMİYOR":"#4a6880"}.get(oa["risk_level"],"#4a6880")
@@ -3124,6 +3181,97 @@ def _get_all_bets(lp, h_name, a_name, h_score, a_score, hf=None, af=None, league
             result.append(c)
     return result[:6]
 
+def classify_confidence(model_pct, oa, hf, af, h2h, market_key=None):
+    """
+    Compute GÜÇLÜ / ORTA RİSK / YÜKSEK RİSK from real numbers the app has
+    already calculated — NOT from any word the LLM wrote. This is the
+    single source of truth for what gets displayed as 'BANKO'.
+
+    market_key: "1" | "X" | "2" | None (None = skip market-vs-model gap check,
+                used for goal markets like over/under where oa['imp'] doesn't apply)
+    """
+    reasons = []
+    score = 0
+    n_criteria = 0
+
+    n_criteria += 1
+    if model_pct >= 62:
+        score += 1
+        reasons.append(f"Model olasılığı yüksek (%{model_pct:.0f})")
+    elif model_pct < 45:
+        reasons.append(f"Model olasılığı düşük (%{model_pct:.0f})")
+    else:
+        reasons.append(f"Model olasılığı orta (%{model_pct:.0f})")
+
+    has_real_odds = bool(oa) and odds_provenance(oa.get("_source", "")).get("is_real", False)
+    n_criteria += 1
+    if has_real_odds:
+        score += 1
+        reasons.append(f"Gerçek bookmaker oranı mevcut ({oa.get('_source')})")
+    else:
+        reasons.append("Gerçek oran yok — doğrulanamıyor")
+
+    if has_real_odds and market_key and oa.get("imp"):
+        imp_key = {"1": "p1", "X": "px", "2": "p2"}.get(market_key)
+        if imp_key:
+            imp_pct = oa["imp"].get(imp_key, model_pct)
+            gap = abs(model_pct - imp_pct)
+            n_criteria += 1
+            if gap <= 12:
+                score += 1
+                reasons.append(f"Model-piyasa uyumu iyi (fark %{gap:.0f})")
+            else:
+                reasons.append(f"Model-piyasa farkı büyük (%{gap:.0f}) — dikkatli ol")
+
+    n_h = hf.get("n", 0) if hf else 0
+    n_a = af.get("n", 0) if af else 0
+    n_criteria += 1
+    if min(n_h, n_a) >= 5:
+        score += 1
+        reasons.append(f"Yeterli form verisi ({n_h}/{n_a} maç)")
+    else:
+        reasons.append(f"Form verisi az ({n_h}/{n_a} maç)")
+
+    if h2h and h2h.get("n", 0) >= 3:
+        n_criteria += 1
+        score += 1
+        reasons.append(f"H2H verisi mevcut ({h2h['n']} maç)")
+
+    ratio = score / max(1, n_criteria)
+    if ratio >= 0.8 and model_pct >= 62:
+        label, emoji, cls = "GÜÇLÜ", "🟢", "banko"
+    elif ratio >= 0.5:
+        label, emoji, cls = "ORTA RİSK", "🟡", "orta"
+    else:
+        label, emoji, cls = "YÜKSEK RİSK", "🔴", "risky"
+
+    return {"label": label, "emoji": emoji, "cls": cls, "reasons": reasons,
+            "score": score, "of": n_criteria, "pct": model_pct}
+
+
+def build_confidence_ranked_picks(stats, oa, hf, af, h2h, h_name, a_name):
+    """
+    Score every core market with classify_confidence() and return them
+    ranked, so the UI shows the best real candidates instead of trusting
+    whatever the LLM chose to call 'BANKO' in free text.
+    """
+    candidates = [
+        (f"{h_name} Kazanır (1)", stats["p1"], "1"),
+        ("Beraberlik (X)",         stats["px"], "X"),
+        (f"{a_name} Kazanır (2)", stats["p2"], "2"),
+        ("2.5 Üst",                stats["u25"], None),
+        ("2.5 Alt",                stats["alt25"], None),
+        ("KG VAR",                 stats["kg"], None),
+        ("KG YOK",                 stats["kgy"], None),
+    ]
+    ranked = []
+    for label, pct, mkey in candidates:
+        conf = classify_confidence(pct, oa, hf, af, h2h, market_key=mkey)
+        ranked.append({"market": label, **conf})
+    ranked.sort(key=lambda x: (-x["score"], -x["pct"]))
+    return ranked
+
+
 def render_vs_ui(match, hf, af, h2h, hxg, axg, h_htxg, a_htxg,
                  stats, top_ms, top_ht, h_stand, a_stand, h_sc, a_sc,
                  analysis_text, odds_analysis=None):
@@ -3691,38 +3839,61 @@ def render_vs_ui(match, hf, af, h2h, hxg, axg, h_htxg, a_htxg,
 </div>""", unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
-    banko  = preds.get("BANKO","")
-    orta   = preds.get("ORTA","")
-    risky  = preds.get("RISKI", preds.get("RISKL", preds.get("SURPR", preds.get("RİSKLİ",""))))
     skor   = preds.get("SKOR","")
 
-    tav_html = '<div class="tahmin-panel"><div class="dp-section-title">PROFESYONEL TAVSİYELER</div>'
-    if banko:
+    # ── GERÇEK KRİTER BAZLI TAVSİYELER (LLM metnine değil, hesaplanan
+    #    skora dayanır — bkz. classify_confidence()) ──
+    ranked_picks = build_confidence_ranked_picks(stats, odds_analysis, hf, af, h2h, h, a)
+    top_pick   = ranked_picks[0] if ranked_picks else None
+    alt_pick   = next((p for p in ranked_picks[1:] if p["label"] != top_pick["label"]), None) if top_pick else None
+    risky_pick = next((p for p in reversed(ranked_picks) if p["label"] == "YÜKSEK RİSK"), None)
+
+    tav_html = '<div class="tahmin-panel"><div class="dp-section-title">PROFESYONEL TAVSİYELER — Kural Bazlı</div>'
+    if top_pick and top_pick["label"] == "GÜÇLÜ":
         tav_html += f"""
 <div class="pred-card banko">
-  <div class="pred-icon">🔒</div>
+  <div class="pred-icon">{top_pick['emoji']}</div>
   <div class="pred-body">
-    <div class="pt">BANKO</div>
-    <div class="pp">{banko[:120]}</div>
+    <div class="pt">GÜÇLÜ TERCİH ({top_pick['score']}/{top_pick['of']} kriter sağlandı)</div>
+    <div class="pp">{top_pick['market']} — %{top_pick['pct']:.0f}</div>
+    <div class="pw">{' · '.join(top_pick['reasons'])}</div>
   </div>
 </div>"""
-    if orta:
+    else:
+        tav_html += """
+<div class="pred-card orta">
+  <div class="pred-icon">⚪</div>
+  <div class="pred-body">
+    <div class="pt">GÜÇLÜ TERCİH YOK</div>
+    <div class="pp">Bu maçta hiçbir market yeterli kriteri karşılamıyor — zorla banko önerilmiyor.</div>
+  </div>
+</div>"""
+    if alt_pick:
         tav_html += f"""
 <div class="pred-card orta">
-  <div class="pred-icon">⚡</div>
+  <div class="pred-icon">{alt_pick['emoji']}</div>
   <div class="pred-body">
-    <div class="pt">ORTA RİSK</div>
-    <div class="pp">{orta[:120]}</div>
+    <div class="pt">{alt_pick['label']} ({alt_pick['score']}/{alt_pick['of']} kriter)</div>
+    <div class="pp">{alt_pick['market']} — %{alt_pick['pct']:.0f}</div>
+    <div class="pw">{' · '.join(alt_pick['reasons'])}</div>
   </div>
 </div>"""
-    if risky:
+    if risky_pick:
         tav_html += f"""
 <div class="pred-card risky">
-  <div class="pred-icon">💎</div>
+  <div class="pred-icon">{risky_pick['emoji']}</div>
   <div class="pred-body">
-    <div class="pt">RİSKLİ</div>
-    <div class="pp">{risky[:120]}</div>
+    <div class="pt">YÜKSEK RİSK (sürpriz olasılığı)</div>
+    <div class="pp">{risky_pick['market']} — %{risky_pick['pct']:.0f}</div>
+    <div class="pw">{' · '.join(risky_pick['reasons'])}</div>
   </div>
+</div>"""
+    _ai_summary = preds.get("BANKO") or preds.get("ORTA") or ""
+    if _ai_summary:
+        tav_html += f"""
+<div style="background:#0a1320;border:1px dashed #2a3a4a;border-radius:8px;
+padding:.5rem .8rem;margin-top:6px;font-size:.68rem;color:#4a6880">
+  🤖 <b>AI yorumu (referans amaçlı, kriter doğrulamasına dahil değil):</b> {_ai_summary[:180]}
 </div>"""
     if skor:
         tav_html += f"""
@@ -4230,16 +4401,12 @@ if st.session_state.matches:
         _d_oa = st.session_state.mdata.get(mid,{}).get("odds_analysis")
         if _d_oa:
             _src = _d_oa.get("_source","")
-            _is_real  = "Bet365" in _src or "football-data" in _src or _src == "manuel"
-            _is_est   = "groq" in _src.lower() or "model" in _src.lower()
-            _src_icon = ("🟢" if "Bet365" in _src
-                        else "📊" if "football-data" in _src
-                        else "✏️" if _src == "manuel"
-                        else "⚠️")
-            _src_label = (_src if _is_real
-                          else "TAHMİN — gerçek oran yok")
-            _chip_color = "#3ecf7a" if "Bet365" in _src else "#f5a623" if _is_est else "#4c9eff"
-            _odds_chip = f' · {_src_icon} <span style="color:{_chip_color}">1:{_d_oa["o1"]} X:{_d_oa["ox"]} 2:{_d_oa["o2"]}</span> <span style="color:#4a6880;font-size:.7em">({_src_label})</span>'
+            _prov = odds_provenance(_src)
+            _chip_color = "#3ecf7a" if _prov["is_real"] else "#f5a623"
+            _src_label = _src if _prov["is_real"] else "TAHMİN — gerçek oran yok"
+            _odds_chip = (f' · {_prov["icon"]} '
+                          f'<span style="color:{_chip_color}">1:{_d_oa["o1"]} X:{_d_oa["ox"]} 2:{_d_oa["o2"]}</span> '
+                          f'<span style="color:#4a6880;font-size:.7em">({_src_label})</span>')
         with st.expander(f"{'✅' if done else '🔴'}  {hn}  vs  {an}  ·  {utc[11:16]}"):
             if d:
                 hxg = d.get("hxg",0)
@@ -4252,8 +4419,9 @@ if st.session_state.matches:
 
                 if oa:
                     _src      = oa.get("_source","")
-                    _is_est   = "groq" in _src.lower() or "model" in _src.lower()
-                    _src_icon = "🟢 Bet365" if "Bet365" in _src else ("📊 fdco.uk" if "football-data" in _src else ("✏️ Manuel" if _src=="manuel" else "⚠️ TAHMİN"))
+                    _prov_e   = odds_provenance(_src)
+                    _is_est   = not _prov_e["is_real"]
+                    _src_icon = _prov_e["icon"]
                     _warn_txt = ' <span style="color:#f5a623;font-weight:700">⚠️ Gerçek oran yok — bu oranlar model tahminidir</span>' if _is_est else ''
                     odds_txt = (f' &nbsp;·&nbsp; <b style="color:#f5a623">1:{oa["o1"]} X:{oa["ox"]} 2:{oa["o2"]}</b>'
                                 f' <span style="color:#4a6880;font-size:.85em">({_src_icon})</span>{_warn_txt}')
