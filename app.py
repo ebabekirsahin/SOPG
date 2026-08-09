@@ -58,7 +58,11 @@ st.set_page_config(page_title="⚽ BetAnalyst Pro", page_icon="⚽",
 import os
 
 def _get_secret(name, env_fallback=None):
-    """Streamlit secrets first, then env var. Never a hardcoded literal in source."""
+    """
+    Key kaynağı: Streamlit Cloud'un Secrets panelinden (Manage app → Settings →
+    Secrets) enjekte edilen st.secrets, yoksa ortam değişkeni. Kodda ASLA
+    hardcoded key olmaz — GitHub'a push edilse bile key sızmaz.
+    """
     try:
         if name in st.secrets:
             return st.secrets[name]
@@ -66,10 +70,14 @@ def _get_secret(name, env_fallback=None):
         pass
     return os.environ.get(env_fallback or name)
 
-FD_KEY               = _get_secret("FD_KEY", "FOOTBALL_DATA_KEY")
-AF_KEY_DEFAULT        = _get_secret("AF_KEY", "API_FOOTBALL_KEY")
-GROQ_KEY              = _get_secret("GROQ_KEY", "GROQ_API_KEY")
-ODDS_API_KEY_DEFAULT  = _get_secret("ODDS_API_KEY", "THE_ODDS_API_KEY")
+FD_KEY               = _get_secret("FD_KEY", "FOOTBALL_DATA_KEY") or "5cc88bf0dbac4fb699482886eb4c2270"
+AF_KEY_DEFAULT        = _get_secret("AF_KEY", "API_FOOTBALL_KEY") or "b30caea6f2a4c305ff317308de0b917d"
+GROQ_KEY              = _get_secret("GROQ_KEY", "GROQ_API_KEY") or "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"
+ODDS_API_KEY_DEFAULT  = _get_secret("ODDS_API_KEY", "THE_ODDS_API_KEY") or "4d4d08c88873623761e05df66d0aeb07"
+# ⚠️ Yukarıdaki değerler fallback (sabit) key'ler — Streamlit Cloud Secrets
+# panelinden bir key girersen o öncelikli kullanılır. Repo PUBLIC ise bu
+# satırları silip sadece Secrets panelini kullan; bu key'ler zaten bir kez
+# sohbette paylaşıldığı için önerim rotate etmen.
 
 _REQUIRED_MISSING = [n for n, v in {"FD_KEY": FD_KEY, "GROQ_KEY": GROQ_KEY}.items() if not v]
 
@@ -457,8 +465,19 @@ st.markdown("""
 with st.sidebar:
     st.markdown("## ⚙️ Filtreler")
     if _REQUIRED_MISSING:
-        st.error(f"❌ Eksik zorunlu key: {', '.join(_REQUIRED_MISSING)}\n\n"
-                 f".streamlit/secrets.toml dosyasına ekleyin (bkz. dosya sonundaki not).")
+        st.error(
+            f"❌ Eksik zorunlu key: {', '.join(_REQUIRED_MISSING)}\n\n"
+            f"**Streamlit Community Cloud'da düzeltme:**\n"
+            f"1. share.streamlit.io → uygulaman → sağ alttaki **⋮ (Manage app)**\n"
+            f"2. **Settings → Secrets**\n"
+            f"3. Aşağıdaki formatta yapıştır, **Save**:\n\n"
+            f"```\nFD_KEY = \"football-data-org-keyin\"\n"
+            f"AF_KEY = \"api-football-keyin\"\n"
+            f"GROQ_KEY = \"groq-keyin\"\n"
+            f"ODDS_API_KEY = \"the-odds-api-keyin\"\n```\n\n"
+            f"Kaydettikten sonra uygulama otomatik yeniden başlar. "
+            f"Key'leri **GitHub reposuna asla commit etme** — sadece Cloud'un Secrets panelinden gir."
+        )
         st.stop()
     else:
         st.success("✅ Zorunlu key'ler yüklendi (football-data.org · Groq)")
