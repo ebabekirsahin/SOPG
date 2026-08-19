@@ -70,16 +70,16 @@ def _get_secret(name, env_fallback=None):
         pass
     return os.environ.get(env_fallback or name)
 
-FD_KEY               = _get_secret("FD_KEY", "FOOTBALL_DATA_KEY")
-AF_KEY_DEFAULT        = _get_secret("AF_KEY", "API_FOOTBALL_KEY")
-GROQ_KEY              = _get_secret("GROQ_KEY", "GROQ_API_KEY")
-ODDS_API_KEY_DEFAULT  = _get_secret("ODDS_API_KEY", "THE_ODDS_API_KEY")
+FD_KEY               = _get_secret("FD_KEY", "FOOTBALL_DATA_KEY") or "5cc88bf0dbac4fb699482886eb4c2270"
+AF_KEY_DEFAULT        = _get_secret("AF_KEY", "API_FOOTBALL_KEY") or "b30caea6f2a4c305ff317308de0b917d"
+GROQ_KEY              = _get_secret("GROQ_KEY", "GROQ_API_KEY") or "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"
+ODDS_API_KEY_DEFAULT  = _get_secret("ODDS_API_KEY", "THE_ODDS_API_KEY") or "4d4d08c88873623761e05df66d0aeb07"
 # ⚠️ Yukarıdaki değerler fallback (sabit) key'ler — Streamlit Cloud Secrets
 # panelinden bir key girersen o öncelikli kullanılır. Repo PUBLIC ise bu
 # satırları silip sadece Secrets panelini kullan; bu key'ler zaten bir kez
 # sohbette paylaşıldığı için önerim rotate etmen.
 
-_REQUIRED_MISSING = ["AF_KEY"] if not AF_KEY_DEFAULT else []
+_REQUIRED_MISSING = [n for n, v in {"FD_KEY": FD_KEY, "GROQ_KEY": GROQ_KEY}.items() if not v]
 
 # ══════════════════════════════════════════════════════════════════
 # CSS
@@ -476,24 +476,6 @@ _AF_ID_TO_FDORG = {
     71: "BSA",
 }
 
-# API-Football bilinen ana ligler. Dinamik /leagues cevabı eksik kalsa bile
-# kullanıcı arayüzünde bu ligleri kaybetmemek için kullanılır.
-_PRIORITY_LEAGUES = {
-    203: ("Super Lig", "Turkey", "TR"),
-    204: ("1. Lig", "Turkey", "TR"),
-    244: ("Veikkausliiga", "Finland", "FI"),
-    103: ("Eliteserien", "Norway", "NO"),
-    119: ("Superliga", "Denmark", "DK"),
-    113: ("Allsvenskan", "Sweden", "SE"),
-    207: ("Super League", "Switzerland", "CH"),
-    218: ("Bundesliga", "Austria", "AT"),
-    144: ("Jupiler Pro League", "Belgium", "BE"),
-    179: ("Premiership", "Scotland", "GB"),
-    197: ("Super League 1", "Greece", "GR"),
-    345: ("Ekstraklasa", "Poland", "PL"),
-}
-
-
 
 @st.cache_data(ttl=21600, show_spinner=False)  # 6 saat — lig listesi nadiren değişir
 def af_fetch_all_leagues(af_key):
@@ -571,19 +553,6 @@ def build_league_index(raw_leagues):
             "data_quality":   _league_data_quality(current),
             "fd_code":        _AF_ID_TO_FDORG.get(lg.get("id")),  # varsa fd.org yedek kodu
         })
-    # API /leagues cevabında bazı planlarda ülke/lig filtresi eksik veya
-    # beklenmedik olabilir. Öncelikli ligleri görünür tut; gerçek veri yine
-    # API-Football'dan çekilir, veri yoksa tahmin uydurulmaz.
-    seen_ids = {x["league_id"] for x in index}
-    for lid, (lname, country, ccode) in _PRIORITY_LEAGUES.items():
-        if lid not in seen_ids:
-            index.append({
-                "league_id": lid, "league_name": lname, "country": country,
-                "country_code": ccode, "country_flag": None, "logo": None,
-                "type": "League", "current_season": 2026,
-                "all_seasons": [2026, 2025], "data_quality": 0.0,
-                "fd_code": _AF_ID_TO_FDORG.get(lid),
-            })
     return index
 
 
@@ -692,7 +661,7 @@ def af_h2h_fixtures(af_key, team1_id, team2_id, n):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def af_standings_norm(af_key, league_id, season):
-    """Standings + all/home/away gol istatistiklerini ortak şemaya getirir."""
+    """fd.org'un api_standings() çıktısıyla AYNI şemada (list of rows)."""
     if not af_key or not league_id:
         return []
     try:
@@ -706,60 +675,19 @@ def af_standings_norm(af_key, league_id, season):
         table = resp[0]["league"]["standings"][0]
         out = []
         for row in table:
-            def side_stats(side):
-                s = row.get(side, {}) or {}
-                goals = s.get("goals", {}) or {}
-                return {
-                    "played": s.get("played", 0) or 0,
-                    "goals_for": goals.get("for", 0) or 0,
-                    "goals_against": goals.get("against", 0) or 0,
-                }
             allrow = row.get("all", {}) or {}
-            allgoals = allrow.get("goals", {}) or {}
             out.append({
                 "team": {"id": row.get("team", {}).get("id")},
                 "position": row.get("rank"),
-                "won": allrow.get("win"), "draw": allrow.get("draw"),
+                "won": allrow.get("win"),
+                "draw": allrow.get("draw"),
                 "lost": allrow.get("lose"),
                 "goalDifference": row.get("goalsDiff"),
                 "points": row.get("points"),
-                "played": allrow.get("played", 0) or 0,
-                "goals_for": allgoals.get("for", 0) or 0,
-                "goals_against": allgoals.get("against", 0) or 0,
-                "home": side_stats("home"),
-                "away": side_stats("away"),
             })
         return out
     except Exception:
         return []
-
-
-def build_league_profile(standings):
-    """Mevcut sezon standings'inden lig bazlı gol ortalamalarını çıkarır."""
-    if not standings:
-        return None
-    rows = [r for r in standings if (r.get("played") or 0) > 0]
-    if not rows:
-        return None
-    total_played = sum(r.get("played", 0) or 0 for r in rows)
-    total_gf = sum(r.get("goals_for", 0) or 0 for r in rows)
-    total_ga = sum(r.get("goals_against", 0) or 0 for r in rows)
-    home_played = sum((r.get("home", {}) or {}).get("played", 0) or 0 for r in rows)
-    away_played = sum((r.get("away", {}) or {}).get("played", 0) or 0 for r in rows)
-    home_gf = sum((r.get("home", {}) or {}).get("goals_for", 0) or 0 for r in rows)
-    away_gf = sum((r.get("away", {}) or {}).get("goals_for", 0) or 0 for r in rows)
-    home_ga = sum((r.get("home", {}) or {}).get("goals_against", 0) or 0 for r in rows)
-    away_ga = sum((r.get("away", {}) or {}).get("goals_against", 0) or 0 for r in rows)
-    # Takımların GF toplamı maç başına iki takım golünü temsil eder.
-    avg_total = (total_gf + total_ga) / max(1, 2 * total_played)
-    home_avg = home_gf / max(1, home_played)
-    away_avg = away_gf / max(1, away_played)
-    return {
-        "avg_total": round(avg_total, 3),
-        "home_avg": round(home_avg, 3),
-        "away_avg": round(away_avg, 3),
-        "rows": {r["team"]["id"]: r for r in rows if r.get("team", {}).get("id") is not None},
-    }
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1015,8 +943,8 @@ with st.sidebar:
                "MaksMaç'ı düşük tutmazsan günlük kota hızla biter.")
     sel_date  = st.date_input("Tarih", value=date.today())
     max_match = st.slider("Maks Maç", 1, 15, 8)
-    n_form    = st.slider("Form Maç Sayısı", 6, 20, 12)
-    n_h2h     = st.slider("H2H Maç Sayısı", 4, 12, 8)
+    n_form    = st.slider("Form Maç Sayısı", 5, 15, 10)
+    n_h2h     = st.slider("H2H Maç Sayısı", 4, 10, 6)
     groq_model = st.selectbox(
         "Groq Modeli",
         [
@@ -1747,86 +1675,52 @@ def poi(lam, k):
     lam = max(lam, 0.01)
     return math.exp(-lam) * (lam**k) / math.factorial(k)
 
-def calc_xg(tf, of, is_home, league_profile=None, team_stand=None, opp_stand=None):
+def calc_xg(tf, of, is_home):
     """
-    Lig bağımlı hücum/savunma modeli.
-    - Lig ortalaması artık sabit 1.30 değil, mevcut sezon standings'inden gelir.
-    - İç saha/deplasman performansı ayrı modellenir.
-    - Son maç formu + sezon standings'i örneklem büyüklüğüne göre shrink edilir.
-    - Rakibin savunma zaafı doğrudan lambda'ya girer.
+    Eski versiyon: base*0.30 + loc*0.40 + opp*0.30 — üç farklı ortalamayı
+    hafif ağırlıklarla harmanlıyordu, bu da her maçı ~1.1-1.6 xG bandına
+    sıkıştırıp Poisson çıktısını hep 1-0/1-1/2-1'e yakınsatıyordu.
+
+    Yeni versiyon: ev/deplasman-özel VE yakın-tarih-ağırlıklı ortalamaya
+    çok daha yüksek ağırlık veriyor, rakibin savunma zaafını/gücünü tam
+    ağırlıkla katıyor, genel lig ortalamasına sadece veri azsa (n<5)
+    yaslanıyor. Sonuç: gerçekten güçlü bir takım gerçekten yüksek xG,
+    gerçekten zayıf bir rakip gerçekten yüksek xG_conceded üretir —
+    farklı maçlar artık farklı Poisson dağılımları verir.
     """
-    if not tf and not team_stand:
-        return 1.20 if not league_profile else (league_profile.get("home_avg", 1.30) if is_home else league_profile.get("away_avg", 1.10))
+    if not tf:
+        return 1.2
 
-    lp = league_profile or {}
-    base = float(lp.get("home_avg" if is_home else "away_avg", 1.30 if is_home else 1.10))
-    overall_base = float(lp.get("avg_total", 2.60)) / 2.0
-    if base <= 0.2: base = 1.30 if is_home else 1.10
+    n = tf.get("n", 0)
+    league_anchor = 1.30  # sadece veri azken hafif çapa, dominant faktör değil
 
-    # Form sinyali
-    n = int((tf or {}).get("n", 0) or 0)
-    loc_key = "w_h_avg_gf" if is_home else "w_a_avg_gf"
-    loc_n_key = "h_n" if is_home else "a_n"
-    form_loc = (tf or {}).get(loc_key) or (tf or {}).get("h_avg_gf" if is_home else "a_avg_gf")
-    form_gen = (tf or {}).get("w_avg_gf") or (tf or {}).get("avg_gf")
-    form_loc_n = int((tf or {}).get(loc_n_key, 0) or 0)
-    if form_loc is None: form_loc = form_gen or overall_base
-    if form_gen is None: form_gen = overall_base
+    # Yakın-tarih ağırlıklı genel form (recency-weighted, mevcutsa)
+    w_gf = tf.get("w_avg_gf", tf.get("avg_gf", league_anchor))
 
-    # Rakip savunması: ev sahibi için rakibin deplasman GA'sı; deplasman için
-    # rakibin iç saha GA'sı. Veri yoksa genel GA kullanılır.
-    opp_n = 0
-    if opp_stand:
-        side = "away" if is_home else "home"
-        os = opp_stand.get(side, {}) or {}
-        opp_gc = os.get("goals_against", 0)
-        opp_n = int(os.get("played", 0) or 0)
-        if not opp_gc and opp_stand.get("played"):
-            opp_gc = opp_stand.get("goals_against", 0)
+    # Ev/deplasman-özel, mümkünse yakın-tarih ağırlıklı versiyonu kullan
+    if is_home:
+        loc = tf.get("w_h_avg_gf") or tf.get("h_avg_gf") or w_gf
+        loc_n = tf.get("h_n", 0)
     else:
-        opp_gc = None
-    if not opp_gc:
-        opp_gc = (of or {}).get("w_a_avg_gc" if is_home else "w_h_avg_gc") or (of or {}).get("avg_gc") or overall_base
-        opp_n = int((of or {}).get("n", 0) or 0)
+        loc = tf.get("w_a_avg_gf") or tf.get("a_avg_gf") or w_gf
+        loc_n = tf.get("a_n", 0)
 
-    # Sezon standings hücum/defans sinyali. Erken sezonda shrink güçlüdür.
-    season_attack = season_def = None
-    if team_stand:
-        side = "home" if is_home else "away"
-        ts = team_stand.get(side, {}) or {}
-        played = int(ts.get("played", 0) or 0)
-        if played >= 2:
-            season_attack = ts.get("goals_for", 0) / played
-            season_def = ts.get("goals_against", 0) / played
-    # Form lokasyon + genel form; 5+ maçta lokasyon baskın.
-    loc_w = min(0.72, 0.35 + form_loc_n * 0.08)
-    gen_w = 1.0 - loc_w
-    attack_form = form_loc * loc_w + form_gen * gen_w
-    if season_attack is not None:
-        sw = min(0.45, max(0.12, (team_stand.get("home" if is_home else "away", {}).get("played", 0) or 0) / 18.0))
-        attack_form = attack_form * (1 - sw) + season_attack * sw
-    else:
-        sw = 0.0
+    opp_gc = of.get("avg_gc", league_anchor) if of else league_anchor
 
-    # Hücum gücü lig ortalamasına göre; savunma gücü 1'den büyükse rakip için daha çok gol demektir.
-    attack_strength = max(0.55, min(1.75, attack_form / max(0.35, base)))
-    if season_def is not None:
-        opp_def = season_def
-        def_n = int((opp_stand.get("away" if is_home else "home", {}) or {}).get("played", 0) or 0)
-    else:
-        opp_def = float(opp_gc)
-        def_n = opp_n
-    def_anchor = base
-    defense_weakness = max(0.55, min(1.75, opp_def / max(0.35, def_anchor)))
+    # Veri azsa (loc_n < 3 ev/dep maçı) genel forma daha çok güven;
+    # veri yeterliyse (>=5) ev/deplasman-özel değer baskın olsun.
+    loc_weight = min(0.60, 0.20 + loc_n * 0.08)  # 0 maç->0.20, 5+ maç->0.60
+    gen_weight = 0.35
+    opp_weight = 0.45  # rakip savunmasının etkisi tam ağırlıkla kalsın
 
-    # Veri azsa aşırı uçları merkeze çek.
-    sample_conf = min(1.0, (form_loc_n + def_n) / 16.0)
-    strength = 1.0 + (attack_strength * defense_weakness - 1.0) * (0.55 + 0.45 * sample_conf)
+    # az veri varsa (n<5) lig çapasına küçük bir pay ver
+    anchor_weight = 0.15 if n < 5 else 0.0
+    total_w = loc_weight + gen_weight + opp_weight + anchor_weight
 
-    # Çok güçlü/zayıf takımlarda skorların 1-0/1-1'e sıkışmasını önle,
-    # ancak gerçekçi sınırları koru.
-    xg = base * strength
-    return round(max(0.20, min(4.20, xg)), 3)
+    xg = (loc * loc_weight + w_gf * gen_weight + opp_gc * opp_weight
+          + league_anchor * anchor_weight) / total_w
+
+    return max(0.25, min(4.5, round(xg, 3)))
 
 def calc_ht_xg(f, xg):
     """
@@ -1845,29 +1739,10 @@ def calc_ht_xg(f, xg):
     blend_w = n / 5.0
     return max(0.15, round(real_ht * blend_w + (xg * 0.43) * (1 - blend_w), 3))
 
-def score_mat(hx, ax, mx=6, rho=-0.08):
-    """Dixon-Coles düzeltilmiş skor matrisi + hafif overdispersion karışımı."""
-    def _raw(lh, la, h, a):
-        p = poi(lh, h) * poi(la, a)
-        if h == 0 and a == 0:
-            p *= (1 - lh * la * rho)
-        elif h == 0 and a == 1:
-            p *= (1 + lh * rho)
-        elif h == 1 and a == 0:
-            p *= (1 + la * rho)
-        elif h == 1 and a == 1:
-            p *= (1 - rho)
-        return max(0.0, p)
+def score_mat(hx, ax, mx=6):
+    return {(h,a): round(poi(hx,h)*poi(ax,a)*100, 3)
+            for h in range(mx+1) for a in range(mx+1)}
 
-    cells = {}
-    # %85 ana Poisson/DC, %15 daha açık maç senaryosu.
-    for h in range(mx + 1):
-        for a in range(mx + 1):
-            p1 = _raw(hx, ax, h, a)
-            p2 = _raw(min(4.5, hx * 1.12), min(4.5, ax * 1.12), h, a)
-            cells[(h, a)] = 0.85 * p1 + 0.15 * p2
-    z = sum(cells.values()) or 1.0
-    return {k: round(v / z * 100, 3) for k, v in cells.items()}
 def compute_stats(ms_mat, ht_mat):
     p1 = round(sum(v for(h,a),v in ms_mat.items() if h>a), 1)
     px = round(sum(v for(h,a),v in ms_mat.items() if h==a), 1)
@@ -3940,82 +3815,55 @@ def build_confidence_ranked_picks(stats, oa, hf, af, h2h, h_name, a_name, patter
     return ranked
 
 
-def compute_final_score_pick(top_ms, top_ht, pattern_data=None, min_pattern_n=30, hf=None, af=None, h2h=None, odds_analysis=None):
-    """Nihai doğru skor: model + son form skor frekansı + H2H + (varsa) odds pattern."""
-    def _parse_sc(sc):
-        try:
-            h, a = sc.split("-")
-            return int(h), int(a)
-        except Exception:
-            return None
+def compute_final_score_pick(top_ms, top_ht, pattern_data=None, min_pattern_n=30):
+    """
+    Nihai MS/İY skor tahminini SADECE Poisson'un #1 satırı olarak vermek
+    yerine (bu, farklı maçların hep aynı 1-0/1-1/2-1'e yakınsamasının
+    sebeplerinden biriydi), varsa GERÇEK geçmiş-maç oran-pattern dağılımıyla
+    (analyze_score_patterns'ın ms_top/ht_top çıktısı — football-data.co.uk'nin
+    gerçek sezon verisinden hesaplanır, uydurma değil) ağırlıklı ortalar.
 
-    def _blend(top_list, pattern_key, form_a=None, form_b=None, h2h_data=None, result_odds=None):
-        scores = {f"{h}-{a}": float(pct) for (h, a), pct in top_list[:16]}
-        # Form skor frekansını düşük ağırlıkla kullan: 12 maçlık örneklemde aşırı uyum yapma.
-        if form_a and form_b:
-            fa = form_a.get(pattern_key.replace("_top", "_score_freq"), {}) if pattern_key == "ms_top" else form_a.get("ht_score_freq", {})
-            fb = form_b.get(pattern_key.replace("_top", "_score_freq"), {}) if pattern_key == "ms_top" else form_b.get("ht_score_freq", {})
-            fw = min(0.16, max(0.06, min(form_a.get("n", 0), form_b.get("n", 0)) / 80.0))
-            for sc, info in fa.items():
-                if info.get("count", 0) < 2: continue
-                scores.setdefault(sc, 0.0)
-                scores[sc] += info.get("pct", 0) * fw * 0.55
-            for sc, info in fb.items():
-                if info.get("count", 0) < 2: continue
-                p = _parse_sc(sc)
-                if not p: continue
-                rev = f"{p[1]}-{p[0]}"
-                scores.setdefault(rev, 0.0)
-                scores[rev] += info.get("pct", 0) * fw * 0.45
-
-        # H2H sadece yardımcı sinyal.
-        if h2h_data and h2h_data.get("n", 0) >= 4:
-            hw = min(0.08, h2h_data.get("n", 0) / 100.0)
-            for sc in h2h_data.get("ms_scores", [])[-8:]:
-                if pattern_key != "ms_top": continue
-                scores.setdefault(sc, 0.0)
-                scores[sc] += hw * 4.0
-
+    pattern_data yoksa veya örneklem çok küçükse (< min_pattern_n) saf
+    Poisson'a döner — az veriyle "geçmiş pattern" iddiası yapılmaz.
+    """
+    def _blend(top_list, pattern_key):
+        cands = {}
+        for (h, a), pct in top_list[:10]:
+            cands[f"{h}-{a}"] = {"poisson": pct}
         pattern_w = 0.0
         pattern_n = pattern_data.get("n", 0) if pattern_data else 0
         if pattern_data and pattern_n >= min_pattern_n:
-            pattern_w = min(0.35, pattern_n / 500.0)
+            pattern_w = min(0.45, pattern_n / 400)
             for sc, pct in pattern_data.get(pattern_key, {}).items():
-                scores[sc] = scores.get(sc, 0.0) * (1-pattern_w) + float(pct) * pattern_w
+                cands.setdefault(sc, {"poisson": 0})
+                cands[sc]["pattern"] = pct
+        blended = []
+        for sc, d in cands.items():
+            p_poi = d.get("poisson", 0)
+            p_pat = d.get("pattern", 0)
+            blended_pct = p_poi * (1 - pattern_w) + p_pat * pattern_w
+            blended.append({"score": sc, "pct": round(blended_pct, 1),
+                             "poisson_pct": round(p_poi, 1), "pattern_pct": round(p_pat, 1)})
+        blended.sort(key=lambda x: -x["pct"])
+        return blended, pattern_w, pattern_n
 
-        # Odds 1X2 exact score değildir; sadece sonuç sınıfı kalibrasyonu yapar.
-        if result_odds and result_odds.get("imp") and pattern_key == "ms_top":
-            imp = result_odds["imp"]
-            for sc, val in list(scores.items()):
-                p = _parse_sc(sc)
-                if not p: continue
-                cls = "p1" if p[0] > p[1] else "px" if p[0] == p[1] else "p2"
-                target = float(imp.get(cls, 0) or 0)
-                if target > 0:
-                    # Sınıf içindeki tüm skorları ortak çarpanla kalibre et.
-                    val_cls = sum(v for s,v in scores.items() if _parse_sc(s) and (("p1" if _parse_sc(s)[0]>_parse_sc(s)[1] else "px" if _parse_sc(s)[0]==_parse_sc(s)[1] else "p2") == cls))
-                    if val_cls > 0:
-                        scores[sc] *= (0.90 + 0.20 * target / val_cls)
-
-        total = sum(max(0.0, v) for v in scores.values()) or 1.0
-        poi_lookup = {f"{h}-{a}": float(pct) for (h, a), pct in top_list}
-        out = []
-        for sc, v in scores.items():
-            out.append({
-                "score": sc,
-                "pct": round(max(0.0, v) / total * 100, 1),
-                "poisson_pct": round(poi_lookup.get(sc, 0.0), 1),
-                "pattern_pct": round(float(pattern_data.get(pattern_key, {}).get(sc, 0)) if pattern_data else 0, 1),
-            })
-        out.sort(key=lambda x: -x["pct"])
-        return out[:10], pattern_w, pattern_n
-
-    ms_blended, ms_pattern_w, ms_pattern_n = _blend(top_ms, "ms_top", hf, af, h2h, odds_analysis)
-    ht_blended, ht_pattern_w, ht_pattern_n = _blend(top_ht, "ht_top", hf, af, h2h, None)
+    ms_blended, ms_pattern_w, ms_pattern_n = _blend(top_ms, "ms_top")
+    ht_blended, ht_pattern_w, ht_pattern_n = _blend(top_ht, "ht_top")
     return {
         "ms": ms_blended, "ms_pattern_weight": ms_pattern_w, "ms_pattern_n": ms_pattern_n,
         "ht": ht_blended, "ht_pattern_weight": ht_pattern_w, "ht_pattern_n": ht_pattern_n,
     }
+
+
+def _score_result_class(score_str):
+    """'2-1' -> '1' (ev kazanır), '1-1' -> 'X', '0-2' -> '2'"""
+    try:
+        h, a = (int(x) for x in score_str.split("-"))
+    except Exception:
+        return None
+    if h > a: return "1"
+    if h < a: return "2"
+    return "X"
 
 
 def compute_surprise_score(ms_blended, min_gap=6):
@@ -4718,7 +4566,7 @@ padding:.5rem .8rem;margin-top:6px;font-size:.68rem;color:#4a6880">
 
     # ── GERÇEK SKOR HESABI: Poisson + (varsa) gerçek geçmiş-maç pattern
     #    dağılımı ağırlıklı ortalaması. LLM metnine bağımlı değil. ──
-    final_scores = compute_final_score_pick(top_ms, top_ht, pattern_data, min_pattern_n=30, hf=hf, af=af, h2h=h2h, odds_analysis=odds_analysis)
+    final_scores = compute_final_score_pick(top_ms, top_ht, pattern_data, min_pattern_n=30)
     ms_top_pick  = final_scores["ms"][0] if final_scores["ms"] else None
     ht_top_pick  = final_scores["ht"][0] if final_scores["ht"] else None
     surprise     = compute_surprise_score(final_scores["ms"])
@@ -5170,9 +5018,8 @@ if fetch_btn:
         a_s=find_standing(standings,aid)
         h_sc=find_scorer(scorers,hid)
         a_sc=find_scorer(scorers,aid)
-        league_profile = build_league_profile(standings)
-        hxg=calc_xg(hf,af,True,league_profile=league_profile,team_stand=h_s,opp_stand=a_s)
-        axg=calc_xg(af,hf,False,league_profile=league_profile,team_stand=a_s,opp_stand=h_s)
+        hxg=calc_xg(hf,af,True)
+        axg=calc_xg(af,hf,False)
         h_htxg=calc_ht_xg(hf,hxg)
         a_htxg=calc_ht_xg(af,axg)
         ms_mat=score_mat(hxg,axg)
@@ -5241,7 +5088,6 @@ if fetch_btn:
             "league_country": _m_country,
             "league_season": _m_season,
             "data_quality": _m_dq,
-            "league_profile": league_profile,
             "form_missing": _form_missing,
         }
     bar.progress(1.0)
