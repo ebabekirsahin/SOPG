@@ -609,6 +609,13 @@ def af_fixtures_by_date(af_key, date_str, league_id=None, season=None):
     try:
         r = requests.get(f"{AF_BASE}/fixtures", headers={"x-apisports-key": af_key},
                           params=params, timeout=25)
+        if r.status_code == 429 or r.status_code == 499:
+            st.warning("⚠️ API-Football günlük istek limiti dolmuş olabilir (ücretsiz plan: 100/gün) — "
+                       "fixtures çekilemedi.")
+            return []
+        if r.status_code == 401:
+            st.warning("⚠️ API-Football key geçersiz.")
+            return []
         if r.status_code != 200:
             return []
         return r.json().get("response", [])
@@ -623,6 +630,10 @@ def af_team_fixtures(af_key, team_id, n):
     try:
         r = requests.get(f"{AF_BASE}/fixtures", headers={"x-apisports-key": af_key},
                           params={"team": team_id, "last": n, "status": "FT"}, timeout=25)
+        if r.status_code == 429 or r.status_code == 499:
+            st.warning(f"⚠️ API-Football limiti doldu — takım (id:{team_id}) form verisi çekilemedi. "
+                       f"Bu takımın tahminleri VARSAYILAN değerlere düşecek.")
+            return []
         if r.status_code != 200:
             return []
         return r.json().get("response", [])
@@ -638,6 +649,9 @@ def af_h2h_fixtures(af_key, team1_id, team2_id, n):
         r = requests.get(f"{AF_BASE}/fixtures/headtohead", headers={"x-apisports-key": af_key},
                           params={"h2h": f"{team1_id}-{team2_id}", "last": n, "status": "FT"},
                           timeout=25)
+        if r.status_code == 429 or r.status_code == 499:
+            st.warning("⚠️ API-Football limiti doldu — H2H verisi çekilemedi.")
+            return []
         if r.status_code != 200:
             return []
         return r.json().get("response", [])
@@ -733,43 +747,55 @@ def get_matches_for_selection(af_key, sel_all_leagues, sel_af_id, sel_season_yea
 
 
 def get_team_matches_dispatch(af_key, team_id, n, use_af):
+    """
+    KRİTİK DÜZELTME: Önceki versiyon AF veri döndürmediğinde (rate limit,
+    401, boş response) sessizce football-data.org'a "fallback" yapıyordu —
+    ama team_id burada AF'in kendi ID uzayında bir sayı, fd.org'un hiç
+    tanımadığı bir ID. fd.org bu ID ile eşleşme bulamayıp boş dönüyordu,
+    parse_form({}) da boş sözlük veriyordu, calc_xg() de boş form için
+    HER TAKIMDA sabit 1.2 varsayılanına düşüyordu — sonuç: hangi takımlar
+    oynarsa oynasın aynı xG, aynı Poisson dağılımı, hep aynı 1-0/1-1 skoru.
+    Artık: kaynak AF ise SADECE AF kullanılır, ID uzayı asla karışmaz.
+    AF gerçekten veri veremiyorsa boş liste döner ve bu açıkça UI'da
+    "form verisi yok" olarak işaretlenir — sahte/yanlış veriyle
+    doldurulmaz.
+    """
     if use_af and af_key:
         raw = af_team_fixtures(af_key, team_id, n)
-        if raw:
-            norm = [af_normalize_fixture(fx) for fx in raw]
-            norm.sort(key=lambda m: m.get("utcDate", ""), reverse=True)
-            return norm[:n]
+        norm = [af_normalize_fixture(fx) for fx in raw]
+        norm.sort(key=lambda m: m.get("utcDate", ""), reverse=True)
+        return norm[:n]
     return api_team_matches(team_id, n)
 
 
 def get_h2h_dispatch(af_key, use_af, team1_id, team2_id, mid, n):
+    """Aynı ID-uzayı düzeltmesi — bkz. get_team_matches_dispatch."""
     if use_af and af_key:
         raw = af_h2h_fixtures(af_key, team1_id, team2_id, n)
-        if raw:
-            norm = [af_normalize_fixture(fx) for fx in raw]
-            norm.sort(key=lambda m: m.get("utcDate", ""), reverse=True)
-            return norm[:n]
+        norm = [af_normalize_fixture(fx) for fx in raw]
+        norm.sort(key=lambda m: m.get("utcDate", ""), reverse=True)
+        return norm[:n]
     return api_h2h(mid, n)
 
 
 def get_standings_dispatch(af_key, use_af, sel_af_id, sel_season_year, sel_code):
+    """Aynı ID-uzayı düzeltmesi — kaynak AF ise fd.org'a asla düşülmez."""
     if use_af and af_key and sel_af_id:
-        table = af_standings_norm(af_key, sel_af_id, sel_season_year)
-        if table:
-            return table
+        return af_standings_norm(af_key, sel_af_id, sel_season_year)
     if sel_code:
         return api_standings(sel_code)
     return []
 
 
 def get_scorers_dispatch(af_key, use_af, sel_af_id, sel_season_year, sel_code):
+    """Aynı ID-uzayı düzeltmesi — kaynak AF ise fd.org'a asla düşülmez."""
     if use_af and af_key and sel_af_id:
-        sc = af_topscorers_norm(af_key, sel_af_id, sel_season_year)
-        if sc:
-            return sc
+        return af_topscorers_norm(af_key, sel_af_id, sel_season_year)
     if sel_code:
         return api_scorers(sel_code)
     return []
+
+
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -4984,6 +5010,10 @@ if fetch_btn:
         time.sleep(0.3)
         h2h=parse_h2h(get_h2h_dispatch(AF_KEY_DEFAULT, _use_af, hid, aid, mid, n_h2h), hid)
         time.sleep(0.3)
+        # Madde: "asla sahte kesinlik üretme" — form verisi gerçekten boşsa
+        # (API limiti/hata) bunu sessizce 1.2 varsayılan xG'ye gömüp her
+        # maçı aynı gösterme; açıkça işaretle ki kullanıcı fark etsin.
+        _form_missing = (not hf) or (not af)
         h_s=find_standing(standings,hid)
         a_s=find_standing(standings,aid)
         h_sc=find_scorer(scorers,hid)
@@ -5058,6 +5088,7 @@ if fetch_btn:
             "league_country": _m_country,
             "league_season": _m_season,
             "data_quality": _m_dq,
+            "form_missing": _form_missing,
         }
     bar.progress(1.0)
     time.sleep(0.3)
@@ -5110,6 +5141,12 @@ if st.session_state.matches:
                           f'<span style="color:#4a6880;font-size:.7em">({_src_label})</span>')
         with st.expander(f"{'✅' if done else '🔴'}  {hn}  vs  {an}  ·  {utc[11:16]}"):
             if d:
+                if d.get("form_missing"):
+                    st.error("🚫 **Form verisi çekilemedi** (API limiti / rate limit / veri yok) — "
+                             "xG ve tüm tahminler bu takım(lar) için VARSAYILAN değerlere dayanıyor, "
+                             "GÜVENİLİR DEĞİL. Farklı maçlarda aynı jenerik skoru (1-0, 1-1 vb.) "
+                             "görüyorsan sebebi budur. API-Football günlük kotan dolmuş olabilir — "
+                             "yarın tekrar dene veya 'Maks Maç' sayısını düşür.")
                 if d.get("league_name"):
                     _dq = d.get("data_quality")
                     _dq_txt = f" &nbsp;·&nbsp; 📊 Veri Kalitesi %{_dq:.0f}" if _dq is not None else ""
