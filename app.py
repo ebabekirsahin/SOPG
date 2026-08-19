@@ -460,6 +460,319 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════
+# LİG KEŞFİ — madde 23-27, 35-36
+# API-Football ANA kaynak, football-data.org YEDEK.
+# ══════════════════════════════════════════════════════════════════
+
+AF_BASE = "https://v3.football.api-sports.io"
+
+# fd.org'un zaten desteklediği ~12 lig için AF lig id <-> fd.org kodu
+# eşlemesi — SADECE fallback amaçlı. Ana kaynak artık AF.
+_AF_ID_TO_FDORG = {
+    39: "PL", 40: "ELC", 45: "FAC",
+    140: "PD", 78: "BL1", 135: "SA",
+    61: "FL1", 88: "DED", 94: "PPL",
+    2: "CL", 3: "EL", 848: "ECL",
+    71: "BSA",
+}
+
+
+@st.cache_data(ttl=21600, show_spinner=False)  # 6 saat — lig listesi nadiren değişir
+def af_fetch_all_leagues(af_key):
+    """
+    Madde 24 — DİNAMİK LİG KEŞFİ.
+    API-Football /leagues endpoint'i API'nin sağlayabildiği TÜM ligleri
+    ve kupaları döndürür. SUPPORTED_LEAGUES gibi elle sınırlı bir liste YOK.
+    """
+    if not af_key:
+        return []
+    try:
+        r = requests.get(f"{AF_BASE}/leagues",
+                          headers={"x-apisports-key": af_key},
+                          timeout=25)
+        if r.status_code != 200:
+            return []
+        return r.json().get("response", [])
+    except Exception:
+        return []
+
+
+def _league_data_quality(season_obj):
+    """
+    Madde 26/33 — DATA QUALITY SCORE.
+    Uydurma bir yüzde DEĞİL: API-Football'un o sezon için gerçekten
+    işaretlediği coverage bayraklarının (fixtures/events, lineups,
+    statistics, standings, players, top_scorers, predictions, odds...)
+    oranı. Böylece "%80 model güveni" gibi sahte kesinlik üretilmiyor.
+    """
+    cov = (season_obj or {}).get("coverage", {}) or {}
+    fx = cov.get("fixtures", {}) or {}
+    flags = [
+        fx.get("events", False),
+        fx.get("lineups", False),
+        fx.get("statistics_fixtures", False),
+        fx.get("statistics_players", False),
+        cov.get("standings", False),
+        cov.get("players", False),
+        cov.get("top_scorers", False),
+        cov.get("top_assists", False),
+        cov.get("predictions", False),
+        cov.get("odds", False),
+    ]
+    if not flags:
+        return 0.0
+    return round(sum(1 for f in flags if f) / len(flags) * 100, 1)
+
+
+def build_league_index(raw_leagues):
+    """
+    Madde 24 — her lig için league_id, league_name, country, country_code,
+    season, type, logo, current_season alanlarını normalize eder.
+    Madde 32 — 'type' alanı (League/Cup) ile kupalar ligden ayrı işaretlenir,
+    böylece kupa maçları lig maçlarıyla aynı kalibrasyon havuzuna girmez.
+    """
+    index = []
+    for item in raw_leagues:
+        lg = item.get("league", {}) or {}
+        co = item.get("country", {}) or {}
+        seasons = item.get("seasons", []) or []
+        if not lg.get("id") or not seasons:
+            continue
+        current = next((s for s in seasons if s.get("current")), seasons[-1])
+        season_years = sorted({s.get("year") for s in seasons if s.get("year")}, reverse=True)
+        index.append({
+            "league_id":      lg.get("id"),
+            "league_name":    lg.get("name", "?"),
+            "country":        co.get("name") or "Dünya / Uluslararası",
+            "country_code":   co.get("code") or "",
+            "country_flag":   co.get("flag"),
+            "logo":           lg.get("logo"),
+            "type":           lg.get("type", "League"),  # "League" | "Cup"
+            "current_season": current.get("year"),
+            "all_seasons":    season_years or [current.get("year")],
+            "data_quality":   _league_data_quality(current),
+            "fd_code":        _AF_ID_TO_FDORG.get(lg.get("id")),  # varsa fd.org yedek kodu
+        })
+    return index
+
+
+_AF_STATUS_MAP = {
+    "NS": "SCHEDULED", "TBD": "SCHEDULED", "PST": "POSTPONED",
+    "1H": "IN_PLAY", "HT": "PAUSED", "2H": "IN_PLAY",
+    "ET": "IN_PLAY", "BT": "PAUSED", "P": "IN_PLAY",
+    "FT": "FINISHED", "AET": "FINISHED", "PEN": "FINISHED",
+    "CANC": "CANCELLED", "ABD": "CANCELLED", "AWD": "FINISHED", "WO": "FINISHED",
+}
+
+
+def af_normalize_fixture(fx):
+    """
+    API-Football fixture nesnesini football-data.org şemasına çevirir.
+    Bu normalize edici sayesinde parse_form(), parse_h2h(), calc_xg(),
+    render_vs_ui() gibi TÜM mevcut kod değişmeden, kaynağın AF mi
+    fd.org mu olduğunu bilmeden çalışmaya devam eder.
+    """
+    fixture = fx.get("fixture", {}) or {}
+    teams   = fx.get("teams", {}) or {}
+    goals   = fx.get("goals", {}) or {}
+    score   = fx.get("score", {}) or {}
+    ht      = score.get("halftime") or {}
+    status  = (fixture.get("status", {}) or {}).get("short", "")
+    league  = fx.get("league", {}) or {}
+    return {
+        "id": fixture.get("id"),
+        "utcDate": fixture.get("date", ""),
+        "status": _AF_STATUS_MAP.get(status, status or "SCHEDULED"),
+        "homeTeam": {"id": (teams.get("home") or {}).get("id"),
+                     "name": (teams.get("home") or {}).get("name", "?")},
+        "awayTeam": {"id": (teams.get("away") or {}).get("id"),
+                     "name": (teams.get("away") or {}).get("name", "?")},
+        "score": {
+            "fullTime": {"home": goals.get("home"), "away": goals.get("away")},
+            "halfTime": {"home": ht.get("home"), "away": ht.get("away")},
+        },
+        "goals": [],  # AF'de gol dakikaları /fixtures/events ile ayrı çekilir (canlı modda opsiyonel)
+        "_af_league_id": league.get("id"),
+        "_af_league_name": league.get("name"),
+        "_af_country": league.get("country"),
+        "_af_season": league.get("season"),
+    }
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def af_fixtures_by_date(af_key, date_str, league_id=None, season=None):
+    if not af_key:
+        return []
+    params = {"date": date_str}
+    if league_id: params["league"] = league_id
+    if season:    params["season"] = season
+    try:
+        r = requests.get(f"{AF_BASE}/fixtures", headers={"x-apisports-key": af_key},
+                          params=params, timeout=25)
+        if r.status_code != 200:
+            return []
+        return r.json().get("response", [])
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def af_team_fixtures(af_key, team_id, n):
+    if not af_key:
+        return []
+    try:
+        r = requests.get(f"{AF_BASE}/fixtures", headers={"x-apisports-key": af_key},
+                          params={"team": team_id, "last": n, "status": "FT"}, timeout=25)
+        if r.status_code != 200:
+            return []
+        return r.json().get("response", [])
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def af_h2h_fixtures(af_key, team1_id, team2_id, n):
+    if not af_key:
+        return []
+    try:
+        r = requests.get(f"{AF_BASE}/fixtures/headtohead", headers={"x-apisports-key": af_key},
+                          params={"h2h": f"{team1_id}-{team2_id}", "last": n, "status": "FT"},
+                          timeout=25)
+        if r.status_code != 200:
+            return []
+        return r.json().get("response", [])
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def af_standings_norm(af_key, league_id, season):
+    """fd.org'un api_standings() çıktısıyla AYNI şemada (list of rows)."""
+    if not af_key or not league_id:
+        return []
+    try:
+        r = requests.get(f"{AF_BASE}/standings", headers={"x-apisports-key": af_key},
+                          params={"league": league_id, "season": season}, timeout=25)
+        if r.status_code != 200:
+            return []
+        resp = r.json().get("response", [])
+        if not resp:
+            return []
+        table = resp[0]["league"]["standings"][0]
+        out = []
+        for row in table:
+            allrow = row.get("all", {}) or {}
+            out.append({
+                "team": {"id": row.get("team", {}).get("id")},
+                "position": row.get("rank"),
+                "won": allrow.get("win"),
+                "draw": allrow.get("draw"),
+                "lost": allrow.get("lose"),
+                "goalDifference": row.get("goalsDiff"),
+                "points": row.get("points"),
+            })
+        return out
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def af_topscorers_norm(af_key, league_id, season):
+    """fd.org'un api_scorers() çıktısıyla AYNI şemada (list of {player,team,goals})."""
+    if not af_key or not league_id:
+        return []
+    try:
+        r = requests.get(f"{AF_BASE}/players/topscorers", headers={"x-apisports-key": af_key},
+                          params={"league": league_id, "season": season}, timeout=25)
+        if r.status_code != 200:
+            return []
+        out = []
+        for item in r.json().get("response", []):
+            pl = item.get("player", {}) or {}
+            stat0 = (item.get("statistics") or [{}])[0]
+            out.append({
+                "player": {"name": pl.get("name", "?")},
+                "team": {"id": (stat0.get("team") or {}).get("id")},
+                "goals": (stat0.get("goals") or {}).get("total", 0) or 0,
+            })
+        return out
+    except Exception:
+        return []
+
+
+def get_matches_for_selection(af_key, sel_all_leagues, sel_af_id, sel_season_year,
+                               sel_code, dt, lim, league_index=None):
+    """
+    Madde 26 + 36 — ANA KAYNAK API-Football. AF başarısız/boş dönerse VE
+    fd.org kodu varsa fd.org'a düşer ("yedek"). 'TÜM LİGLER' seçiliyse
+    tarihe göre TÜM liglerdeki maçlar tek çağrıda gelir, veri kalitesine
+    göre sıralanır (düşük kaliteli lig Premier League ile aynı güvende
+    gösterilmez).
+    Dönen: (matches_normalized, source_label)
+    """
+    if af_key:
+        if sel_all_leagues:
+            raw = af_fixtures_by_date(af_key, dt)
+            raw = [fx for fx in raw
+                   if (fx.get("fixture", {}) or {}).get("status", {}).get("short")
+                   in ("NS", "TBD", "PST")]
+            dq_by_id = {l["league_id"]: l["data_quality"] for l in (league_index or [])}
+            raw.sort(key=lambda fx: -dq_by_id.get((fx.get("league", {}) or {}).get("id"), 0))
+            if raw:
+                return [af_normalize_fixture(fx) for fx in raw[:lim]], "TÜM LİGLER (API-Football)"
+        elif sel_af_id:
+            raw = af_fixtures_by_date(af_key, dt, league_id=sel_af_id, season=sel_season_year)
+            raw = [fx for fx in raw
+                   if (fx.get("fixture", {}) or {}).get("status", {}).get("short")
+                   in ("NS", "TBD", "PST")]
+            if raw:
+                return [af_normalize_fixture(fx) for fx in raw[:lim]], "API-Football"
+    if sel_code:
+        return api_matches(sel_code, dt, lim), "football-data.org (yedek)"
+    return [], "Kaynak yok"
+
+
+def get_team_matches_dispatch(af_key, team_id, n, use_af):
+    if use_af and af_key:
+        raw = af_team_fixtures(af_key, team_id, n)
+        if raw:
+            norm = [af_normalize_fixture(fx) for fx in raw]
+            norm.sort(key=lambda m: m.get("utcDate", ""), reverse=True)
+            return norm[:n]
+    return api_team_matches(team_id, n)
+
+
+def get_h2h_dispatch(af_key, use_af, team1_id, team2_id, mid, n):
+    if use_af and af_key:
+        raw = af_h2h_fixtures(af_key, team1_id, team2_id, n)
+        if raw:
+            norm = [af_normalize_fixture(fx) for fx in raw]
+            norm.sort(key=lambda m: m.get("utcDate", ""), reverse=True)
+            return norm[:n]
+    return api_h2h(mid, n)
+
+
+def get_standings_dispatch(af_key, use_af, sel_af_id, sel_season_year, sel_code):
+    if use_af and af_key and sel_af_id:
+        table = af_standings_norm(af_key, sel_af_id, sel_season_year)
+        if table:
+            return table
+    if sel_code:
+        return api_standings(sel_code)
+    return []
+
+
+def get_scorers_dispatch(af_key, use_af, sel_af_id, sel_season_year, sel_code):
+    if use_af and af_key and sel_af_id:
+        sc = af_topscorers_norm(af_key, sel_af_id, sel_season_year)
+        if sc:
+            return sc
+    if sel_code:
+        return api_scorers(sel_code)
+    return []
+
+
+# ══════════════════════════════════════════════════════════════════
 # SIDEBAR
 # ══════════════════════════════════════════════════════════════════
 with st.sidebar:
@@ -495,56 +808,113 @@ with st.sidebar:
         help="Canlı modda oynanan maçları gerçek zamanlı analiz et"
     )
 
-    # ── Ücretsiz planda çalışan ligler (football-data.org) ──
-    LEAGUE_GROUPS = {
-        "🌍 Avrupa Kulüp": {
-            "UEFA Champions League ⭐": "CL",
-            "UEFA Europa League":       "EL",
-            "UEFA Conference League":   "ECL",
-        },
-        "🏴󠁧󠁢󠁥󠁮󠁧󠁿 İngiltere": {
-            "Premier League":           "PL",
-            "Championship (2. Lig) ✅": "ELC",
-            "FA Cup":                   "FAC",
-        },
-        "🇪🇸 İspanya": {
-            "La Liga":                  "PD",
-        },
-        "🇩🇪 Almanya": {
-            "Bundesliga":               "BL1",
-        },
-        "🇮🇹 İtalya": {
-            "Serie A":                  "SA",
-        },
-        "🇫🇷 Fransa": {
-            "Ligue 1":                  "FL1",
-        },
-        "🇳🇱 Hollanda": {
-            "Eredivisie":               "DED",
-        },
-        "🇵🇹 Portekiz": {
-            "Primeira Liga":            "PPL",
-        },
-        "🇧🇷 Brezilya": {
-            "Série A":                  "BSA",
-        },
-        "🌐 Milli Takım": {
-            "FIFA World Cup":           "WC",
-            "UEFA Avrupa Şampiyonası":  "EC",
-        },
-    }
+    # ══════ MADDE 23-27, 35-36: DİNAMİK LİG KEŞFİ ══════
+    # API-Football ana kaynak — SUPPORTED_LEAGUES gibi elle sınırlı bir
+    # liste YOK (madde 36). football-data.org sadece ~12 lig için fallback.
+    st.markdown("### 🌍 Lig Seçimi — Dinamik")
 
-    sel_group = st.selectbox("Kategori", list(LEAGUE_GROUPS.keys()))
-    sel_label = st.selectbox("Lig", list(LEAGUE_GROUPS[sel_group].keys()))
-    sel_code  = LEAGUE_GROUPS[sel_group][sel_label].split("#")[0].strip()
+    league_index = []
+    if AF_KEY_DEFAULT:
+        _raw_leagues = af_fetch_all_leagues(AF_KEY_DEFAULT)
+        league_index = build_league_index(_raw_leagues)
 
-    st.info(
-        "ℹ️ **2. ligler neden yok?**\n\n"
-        "football-data.org ücretsiz planda yalnızca belirli 1. ligler ve "
-        "İngiltere Championship dahil. 2. Bundesliga, Serie B, Ligue 2, "
-        "Segunda División vb. 49€/ay ücretli plan gerektiriyor. "
-        "Ücretsiz planda mevcut olan ligler yukarıda listelenmiştir."
-    )
+    if not league_index:
+        st.error("❌ API-Football lig listesi çekilemedi (key yok / rate limit / "
+                  "ağ hatası) — eski sabit fd.org lig listesine düşülüyor.")
+        _FALLBACK_LEAGUES = {
+            "Premier League": "PL", "Championship": "ELC", "La Liga": "PD",
+            "Bundesliga": "BL1", "Serie A": "SA", "Ligue 1": "FL1",
+            "Eredivisie": "DED", "Primeira Liga": "PPL", "Brezilya Série A": "BSA",
+            "Champions League": "CL", "Europa League": "EL",
+        }
+        sel_label = st.selectbox("Lig (yedek liste)", list(_FALLBACK_LEAGUES.keys()))
+        sel_code  = _FALLBACK_LEAGUES[sel_label]
+        sel_all_leagues = False
+        sel_league_obj  = None
+        sel_season_year = None
+        sel_af_id       = None
+        sel_is_cup      = False
+    else:
+        ALL_LEAGUES_LABEL = "🌍 TÜM LİGLER"
+        search_q = st.text_input("🔍 Lig / Ülke Ara",
+                                  placeholder="ör: Süper Lig, Brazil, MLS, Bundesliga...")
+
+        if search_q.strip():
+            q = search_q.strip().lower()
+            found = [l for l in league_index
+                     if q in l["league_name"].lower() or q in l["country"].lower()]
+            found.sort(key=lambda l: -l["data_quality"])
+            sel_all_leagues = False
+            if not found:
+                st.caption("Eşleşme yok.")
+                sel_league_obj = None
+            else:
+                opt_labels = [f"{l['country_flag'] or '🏳️'} {l['league_name']} — {l['country']} "
+                              f"(%{l['data_quality']:.0f})" for l in found[:40]]
+                pick = st.selectbox(f"Sonuçlar ({len(found)})", opt_labels)
+                sel_league_obj = found[opt_labels.index(pick)]
+        else:
+            countries = sorted({l["country"] for l in league_index})
+            country_pick = st.selectbox("🌍 Ülke", [ALL_LEAGUES_LABEL] + countries)
+            sel_all_leagues = (country_pick == ALL_LEAGUES_LABEL)
+
+            if sel_all_leagues:
+                sel_league_obj = None
+                st.caption("Madde 26 — tüm ülkelerdeki yaklaşan maçlar taranır, "
+                           "sonuçlar veri kalitesine göre sıralanır (düşük veri "
+                           "kaliteli lig Premier League ile aynı güvende gösterilmez).")
+            else:
+                leagues_here = sorted(
+                    [l for l in league_index if l["country"] == country_pick],
+                    key=lambda l: (-l["data_quality"], l["league_name"])
+                )
+                league_labels = [
+                    f"{l['league_name']} ({'Kupa' if l['type']=='Cup' else 'Lig'}) "
+                    f"· %{l['data_quality']:.0f} veri kalitesi"
+                    for l in leagues_here
+                ]
+                lg_pick = st.selectbox("🏆 Lig", league_labels)
+                sel_league_obj = leagues_here[league_labels.index(lg_pick)]
+
+        if sel_league_obj:
+            seasons_opts = sel_league_obj["all_seasons"]
+            default_idx = (seasons_opts.index(sel_league_obj["current_season"])
+                           if sel_league_obj["current_season"] in seasons_opts else 0)
+            sel_season_year = st.selectbox("📅 Sezon", seasons_opts, index=default_idx)
+
+            dq = sel_league_obj["data_quality"]
+            bar_filled = max(0, min(10, int(round(dq / 10))))
+            bar = "█" * bar_filled + "░" * (10 - bar_filled)
+            dq_icon = "🟢" if dq >= 75 else ("🟡" if dq >= 50 else "🔴")
+            st.markdown(f"**📊 Veri Kalitesi:** `{bar}` %{dq:.0f} {dq_icon}")
+            if dq < 50:
+                st.caption("⚠️ Düşük veri kalitesi — BANKO güveni otomatik düşürülür (madde 33).")
+            if sel_league_obj["type"] == "Cup":
+                st.caption("🏆 Kupa/turnuva — istatistikler lig maçlarından ayrı kalibre edilir (madde 32).")
+
+            sel_code   = sel_league_obj["fd_code"]     # varsa fd.org yedek kodu, yoksa None
+            sel_label  = sel_league_obj["league_name"]
+            sel_af_id  = sel_league_obj["league_id"]
+            sel_is_cup = sel_league_obj["type"] == "Cup"
+
+            if sel_code:
+                st.caption(f"✅ Ana kaynak: API-Football · Yedek: football-data.org ({sel_code})")
+            else:
+                st.caption("✅ Ana kaynak: API-Football (bu lig için fd.org yedeği yok)")
+        elif sel_all_leagues:
+            sel_season_year = None
+            sel_code = None
+            sel_label = "🌍 Tüm Ligler"
+            sel_af_id = None
+            sel_is_cup = False
+        else:
+            sel_season_year = None
+            sel_code = sel_label = sel_af_id = None
+            sel_is_cup = False
+
+    st.caption("⚠️ API-Football ücretsiz plan günde 100 istek — 'Maçları Çek' "
+               "tek tıkla ~ (1 + 2×MaksMaç + MaksMaç + 2) istek harcar. "
+               "MaksMaç'ı düşük tutmazsan günlük kota hızla biter.")
     sel_date  = st.date_input("Tarih", value=date.today())
     max_match = st.slider("Maks Maç", 1, 15, 8)
     n_form    = st.slider("Form Maç Sayısı", 5, 15, 10)
@@ -4582,19 +4952,25 @@ st.divider()
 # MAÇLARI ÇEK
 # ══════════════════════════════════════════════════════════════════
 if fetch_btn:
-    with st.spinner("📡 Maçlar çekiliyor..."):
-        matches = api_matches(sel_code, sel_date.strftime("%Y-%m-%d"), max_match)
+    with st.spinner("📡 Maçlar çekiliyor (API-Football)..."):
+        matches, _match_source = get_matches_for_selection(
+            AF_KEY_DEFAULT, sel_all_leagues, sel_af_id, sel_season_year,
+            sel_code, sel_date.strftime("%Y-%m-%d"), max_match, league_index
+        )
+    _use_af = _match_source.startswith("API-Football") or _match_source.startswith("TÜM")
+    st.session_state["match_source"] = _match_source
     if not matches:
-        st.error(f"**{sel_date:%d.%m.%Y} · {sel_label}** için planlanmış maç bulunamadı.")
+        st.error(f"**{sel_date:%d.%m.%Y} · {sel_label or 'TÜM LİGLER'}** için "
+                 f"planlanmış maç bulunamadı. (Denenen kaynak: {_match_source})")
         st.stop()
     st.session_state.matches=matches
     st.session_state.mdata={}
     st.session_state.analyses={}
-    st.success(f"✅ {len(matches)} maç!")
+    st.success(f"✅ {len(matches)} maç! · Kaynak: {_match_source}")
     with st.spinner("📊 Lig verileri..."):
-        standings=api_standings(sel_code)
-        scorers=api_scorers(sel_code)
-        time.sleep(0.5)
+        standings = get_standings_dispatch(AF_KEY_DEFAULT, _use_af, sel_af_id, sel_season_year, sel_code)
+        scorers   = get_scorers_dispatch(AF_KEY_DEFAULT, _use_af, sel_af_id, sel_season_year, sel_code)
+        time.sleep(0.3)
     bar=st.progress(0)
     for i,m in enumerate(matches):
         mid=m["id"]
@@ -4603,11 +4979,11 @@ if fetch_btn:
         hn=m["homeTeam"]["name"]
         an=m["awayTeam"]["name"]
         bar.progress(i/len(matches),text=f"({i+1}/{len(matches)}) {hn} – {an}")
-        hf=parse_form(api_team_matches(hid,n_form),hid)
-        af=parse_form(api_team_matches(aid,n_form),aid)
-        time.sleep(0.4)
-        h2h=parse_h2h(api_h2h(mid,n_h2h),hid)
-        time.sleep(0.4)
+        hf=parse_form(get_team_matches_dispatch(AF_KEY_DEFAULT, hid, n_form, _use_af), hid)
+        af=parse_form(get_team_matches_dispatch(AF_KEY_DEFAULT, aid, n_form, _use_af), aid)
+        time.sleep(0.3)
+        h2h=parse_h2h(get_h2h_dispatch(AF_KEY_DEFAULT, _use_af, hid, aid, mid, n_h2h), hid)
+        time.sleep(0.3)
         h_s=find_standing(standings,hid)
         a_s=find_standing(standings,aid)
         h_sc=find_scorer(scorers,hid)
@@ -4664,6 +5040,13 @@ if fetch_btn:
                               stats,h_s,a_s,h_sc,a_sc,top_ms,top_ht,
                               odds_analysis=oa)
 
+        _m_league_name = m.get("_af_league_name") or sel_label
+        _m_country     = m.get("_af_country") or (sel_league_obj["country"] if sel_league_obj else "")
+        _m_season      = m.get("_af_season") or sel_season_year
+        _m_dq = (sel_league_obj["data_quality"] if sel_league_obj else
+                 next((l["data_quality"] for l in league_index
+                       if l["league_id"] == m.get("_af_league_id")), None))
+
         st.session_state.mdata[mid]={
             "match":m,"prompt":prompt,"hf":hf,"af":af,"h2h":h2h,
             "hxg":hxg,"axg":axg,"h_htxg":h_htxg,"a_htxg":a_htxg,
@@ -4671,6 +5054,10 @@ if fetch_btn:
             "h_stand":h_s,"a_stand":a_s,"h_sc":h_sc,"a_sc":a_sc,
             "odds_analysis":oa,
             "pattern_data":pattern_data,
+            "league_name": _m_league_name,
+            "league_country": _m_country,
+            "league_season": _m_season,
+            "data_quality": _m_dq,
         }
     bar.progress(1.0)
     time.sleep(0.3)
@@ -4723,6 +5110,11 @@ if st.session_state.matches:
                           f'<span style="color:#4a6880;font-size:.7em">({_src_label})</span>')
         with st.expander(f"{'✅' if done else '🔴'}  {hn}  vs  {an}  ·  {utc[11:16]}"):
             if d:
+                if d.get("league_name"):
+                    _dq = d.get("data_quality")
+                    _dq_txt = f" &nbsp;·&nbsp; 📊 Veri Kalitesi %{_dq:.0f}" if _dq is not None else ""
+                    st.caption(f"🏆 {d['league_name']}  ·  🌍 {d.get('league_country','')}  "
+                               f"·  📅 Sezon {d.get('league_season','?')}{_dq_txt}")
                 hxg = d.get("hxg",0)
                 axg = d.get("axg",0)
                 hf  = d.get("hf",{})
