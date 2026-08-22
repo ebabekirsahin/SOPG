@@ -741,26 +741,217 @@ def af_topscorers_norm(af_key, league_id, season):
         return []
 
 
-def get_matches_for_selection(af_key, sel_all_leagues, sel_af_id, sel_season_year,
-                               sel_code, dt, lim, league_index=None):
+_SOFA_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+                  "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+    "Accept": "application/json",
+    "Referer": "https://www.sofascore.com/",
+}
+
+_SOFA_STATUS_MAP = {
+    "notstarted": "SCHEDULED", "inprogress": "IN_PLAY", "halftime": "PAUSED",
+    "finished": "FINISHED", "postponed": "POSTPONED", "canceled": "CANCELLED",
+    "cancelled": "CANCELLED", "interrupted": "PAUSED", "abandoned": "CANCELLED",
+}
+
+
+@st.cache_data(ttl=180, show_spinner=False)
+def sofascore_scheduled_events(date_str):
     """
-    Madde 26 + 36 — ANA KAYNAK API-Football. AF başarısız/boş dönerse VE
-    fd.org kodu varsa fd.org'a düşer ("yedek"). 'TÜM LİGLER' seçiliyse
-    tarihe göre TÜM liglerdeki maçlar tek çağrıda gelir, veri kalitesine
-    göre sıralanır (düşük kaliteli lig Premier League ile aynı güvende
-    gösterilmez).
+    ÜÇÜNCÜ VERİ KAYNAĞI — Sofascore. API key GEREKTİRMEZ, dünya çapında
+    kapsama sağlar (Türkiye, Norveç, Danimarka, Finlandiya dahil HER
+    ülkenin maçlarını tek çağrıda döndürür). API-Football'un ücretsiz
+    plan kısıtına (büyük 8 lig dışı ülkelerde güncel sezona erişim yok)
+    takılan durumlarda son çare olarak kullanılır.
+    """
+    try:
+        r = requests.get(
+            f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{date_str}",
+            headers=_SOFA_HEADERS, timeout=20
+        )
+        if r.status_code != 200:
+            return []
+        return r.json().get("events", [])
+    except Exception:
+        return []
+
+
+def _sofa_text_match(name1, name2):
+    def norm(s):
+        s = (s or "").lower().strip()
+        for a, b in {"ü":"u","ö":"o","ç":"c","ş":"s","ğ":"g","ı":"i"}.items():
+            s = s.replace(a, b)
+        return s
+    n1, n2 = norm(name1), norm(name2)
+    if not n1 or not n2:
+        return False
+    return n1 == n2 or n1 in n2 or n2 in n1
+
+
+def sofascore_find_league_events(date_str, league_name, country_name):
+    events = sofascore_scheduled_events(date_str)
+    matched = []
+    for ev in events:
+        tour = ev.get("tournament", {}) or {}
+        t_name = tour.get("name", "")
+        if _sofa_text_match(t_name, league_name):
+            matched.append(ev)
+    return matched
+
+
+def sofascore_normalize_event(ev):
+    """Sofascore event -> fd.org şeması. parse_form/parse_h2h/calc_xg vb.
+    hiç değişmeden, kaynağın Sofascore olduğunu bilmeden çalışır."""
+    import datetime as _dt
+    status = (ev.get("status", {}) or {}).get("type", "")
+    home = ev.get("homeTeam", {}) or {}
+    away = ev.get("awayTeam", {}) or {}
+    hs = ev.get("homeScore", {}) or {}
+    asc = ev.get("awayScore", {}) or {}
+    ts = ev.get("startTimestamp")
+    utc_str = ""
+    if ts:
+        try:
+            utc_str = _dt.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except Exception:
+            utc_str = ""
+    tour = ev.get("tournament", {}) or {}
+    season = ev.get("season", {}) or {}
+    return {
+        "id": ev.get("id"),
+        "utcDate": utc_str,
+        "status": _SOFA_STATUS_MAP.get(status, "SCHEDULED"),
+        "homeTeam": {"id": home.get("id"), "name": home.get("name", "?")},
+        "awayTeam": {"id": away.get("id"), "name": away.get("name", "?")},
+        "score": {
+            "fullTime": {"home": hs.get("current"), "away": asc.get("current")},
+            "halfTime": {"home": hs.get("period1"), "away": asc.get("period1")},
+        },
+        "goals": [],
+        "_sofa_tournament_id": tour.get("id"),
+        "_sofa_season_id": season.get("id"),
+    }
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def sofascore_team_last_events(team_id, n):
+    """Sofascore takım maç geçmişi — sayfa sayfa çeker (id uzayı Sofascore'a özel)."""
+    all_events = []
+    try:
+        for page in range(0, 3):
+            r = requests.get(
+                f"https://api.sofascore.com/api/v1/team/{team_id}/events/last/{page}",
+                headers=_SOFA_HEADERS, timeout=20
+            )
+            if r.status_code != 200:
+                break
+            data = r.json().get("events", [])
+            if not data:
+                break
+            all_events.extend(data)
+            if len(all_events) >= n:
+                break
+    except Exception:
+        pass
+    finished = [e for e in all_events if (e.get("status", {}) or {}).get("type") == "finished"]
+    finished.sort(key=lambda e: e.get("startTimestamp", 0), reverse=True)
+    return finished[:n]
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def sofascore_standings(tournament_id, season_id):
+    """fd.org api_standings() ile AYNI şema."""
+    if not tournament_id or not season_id:
+        return []
+    try:
+        r = requests.get(
+            f"https://api.sofascore.com/api/v1/tournament/{tournament_id}/season/{season_id}/standings/total",
+            headers=_SOFA_HEADERS, timeout=20
+        )
+        if r.status_code != 200:
+            return []
+        rows = (r.json().get("standings") or [{}])[0].get("rows", [])
+        out = []
+        for row in rows:
+            team = row.get("team", {}) or {}
+            out.append({
+                "team": {"id": team.get("id")},
+                "position": row.get("position"),
+                "won": row.get("wins"),
+                "draw": row.get("draws"),
+                "lost": row.get("losses"),
+                "goalDifference": (row.get("scoresFor", 0) or 0) - (row.get("scoresAgainst", 0) or 0),
+                "points": row.get("points"),
+            })
+        return out
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def sofascore_topscorers(tournament_id, season_id):
+    """fd.org api_scorers() ile AYNI şema — best-effort (Sofascore'un iç
+    yapısı değişirse boş döner, uydurma veri üretmez)."""
+    if not tournament_id or not season_id:
+        return []
+    try:
+        r = requests.get(
+            f"https://api.sofascore.com/api/v1/tournament/{tournament_id}/season/{season_id}/top-players/overall",
+            headers=_SOFA_HEADERS, timeout=20
+        )
+        if r.status_code != 200:
+            return []
+        goals_list = (r.json().get("topPlayers") or {}).get("goals", [])
+        out = []
+        for item in goals_list:
+            pl = item.get("player", {}) or {}
+            team = pl.get("team", {}) or {}
+            out.append({
+                "player": {"name": pl.get("name", "?")},
+                "team": {"id": team.get("id")},
+                "goals": (item.get("statistics") or {}).get("goals", 0) or 0,
+            })
+        return out
+    except Exception:
+        return []
+
+
+def sofascore_h2h_matches(event_id, n):
+    """
+    Best-effort H2H. Sofascore'un h2h/events endpoint'i her zaman net bir
+    maç listesi vermeyebilir — parse edilemezse boş döner (parse_h2h({})
+    zaten güvenli şekilde 'H2H verisi yok' olarak ele alınır, uydurma
+    veri üretilmez).
+    """
+    try:
+        r = requests.get(
+            f"https://api.sofascore.com/api/v1/event/{event_id}/h2h/events",
+            headers=_SOFA_HEADERS, timeout=20
+        )
+        if r.status_code != 200:
+            return []
+        events = r.json().get("events", []) or []
+        finished = [e for e in events if (e.get("status", {}) or {}).get("type") == "finished"]
+        finished.sort(key=lambda e: e.get("startTimestamp", 0), reverse=True)
+        return finished[:n]
+    except Exception:
+        return []
+
+
+def get_matches_for_selection(af_key, sel_all_leagues, sel_af_id, sel_season_year,
+                               sel_code, dt, lim, league_index=None,
+                               league_name=None, country_name=None):
+    """
+    Madde 26 + 36 — ANA KAYNAK API-Football, YEDEK football-data.org,
+    SON ÇARE Sofascore (key gerektirmez, dünya çapında kapsama).
 
     NOT (Türkiye/Norveç/Danimarka/Finlandiya vb. "boş" görünme sebebi):
-    API-Football'un ÜCRETSİZ planı, İngiltere/İspanya/Almanya/İtalya/
-    Fransa/Hollanda/Portekiz/Brezilya DIŞINDAKİ ülkeler için genelde
-    GÜNCEL sezona değil, sadece eski sezonlara (belgelenmiş: 2021-2023)
-    erişim veriyor. API bunu hatayla değil SESSİZCE BOŞ DİZİ ile
-    bildiriyor — bu yüzden önce sezon parametresiyle, o boş dönerse
-    sezonsuz tekrar deniyoruz; ikisi de boşsa gerçek nedeni üçüncü
-    döndürülen değerde ("hint") açıkça belirtiyoruz — "maç yok" diye
-    yanıltıcı bir sessizlik olmasın diye.
+    API-Football'un ÜCRETSİZ planı, büyük 8 lig dışındaki ülkeler için
+    genelde GÜNCEL sezona değil, sadece eski sezonlara erişim veriyor.
+    Bu yüzden AF'i 3 farklı sorgu şekliyle deniyoruz; hepsi boşsa
+    Sofascore'a (key gerektirmeyen, gerçekten evrensel kaynak) düşüyoruz.
 
-    Dönen: (matches_normalized, source_label, hint_or_None)
+    Dönen: (matches_normalized, source_label, hint_or_None, extra_meta_dict)
     """
     if af_key:
         if sel_all_leagues:
@@ -771,105 +962,118 @@ def get_matches_for_selection(af_key, sel_all_leagues, sel_af_id, sel_season_yea
             dq_by_id = {l["league_id"]: l["data_quality"] for l in (league_index or [])}
             raw.sort(key=lambda fx: -dq_by_id.get((fx.get("league", {}) or {}).get("id"), 0))
             if raw:
-                return [af_normalize_fixture(fx) for fx in raw[:lim]], "TÜM LİGLER (API-Football)", None
+                return [af_normalize_fixture(fx) for fx in raw[:lim]], "TÜM LİGLER (API-Football)", None, {}
         elif sel_af_id:
             raw = af_fixtures_by_date(af_key, dt, league_id=sel_af_id, season=sel_season_year)
             raw = [fx for fx in raw
                    if (fx.get("fixture", {}) or {}).get("status", {}).get("short")
                    in ("NS", "TBD", "PST")]
             if raw:
-                return [af_normalize_fixture(fx) for fx in raw[:lim]], "API-Football", None
+                return [af_normalize_fixture(fx) for fx in raw[:lim]], "API-Football", None, {}
 
-            # Sezonlu sorgu boş döndü — sezon parametresini kaldırıp tekrar dene
-            # (AF bazı liglerde season eşleşmesinde katı davranıp yanlış/eksik
-            # season numarasında sessizce boş dönebiliyor)
             raw2 = af_fixtures_by_date(af_key, dt, league_id=sel_af_id)
             raw2 = [fx for fx in raw2
                     if (fx.get("fixture", {}) or {}).get("status", {}).get("short")
                     in ("NS", "TBD", "PST")]
             if raw2:
-                return [af_normalize_fixture(fx) for fx in raw2[:lim]], "API-Football (sezonsuz sorgu)", None
+                return [af_normalize_fixture(fx) for fx in raw2[:lim]], "API-Football (sezonsuz sorgu)", None, {}
 
-            # İkisi de boş — 'from'/'to' aralığıyla, sezon hiç belirtmeden
-            # dene. Bu AF'in sezonu tarihe göre kendi çözmesini sağlar ve
-            # kış/yaz sezon sınırındaki uyumsuzlukları (Türkiye, Norveç,
-            # Danimarka, Finlandiya gibi ülkelerde en sık görülen sebep) aşar.
             raw3 = af_fixtures_by_range(af_key, sel_af_id, dt, dt)
             raw3 = [fx for fx in raw3
                     if (fx.get("fixture", {}) or {}).get("status", {}).get("short")
                     in ("NS", "TBD", "PST")]
             if raw3:
-                return [af_normalize_fixture(fx) for fx in raw3[:lim]], "API-Football (tarih aralığı sorgusu)", None
+                return [af_normalize_fixture(fx) for fx in raw3[:lim]], "API-Football (tarih aralığı sorgusu)", None, {}
 
-            if not sel_code:
-                _hint = (
-                    "Üç farklı sorgu da (sezonlu / sezonsuz / tarih-aralığı) boş döndü. "
-                    "En olası sebep: API-Football'un ÜCRETSİZ planı bu ülke için GÜNCEL "
-                    "sezona erişim vermiyor olabilir (belgelenmiş kısıt: büyük 8 lig "
-                    "dışındaki ülkelerde ücretsiz plan sadece 2021-2023 sezonlarını "
-                    "destekliyor). Doğrulamak için sidebar'dan Sezon'u 2023'e çekip "
-                    "tekrar dene — o zaman maç görünüyorsa kısıt bu; API-Football Pro "
-                    "plana geçmeden güncel sezon için bu ülkede veri çekilemez."
-                )
-                return [], "API-Football (boş)", _hint
+    # API-Football üç sorguda da boş döndü (veya key yok) — Sofascore'a düş.
+    if league_name:
+        sofa_events = sofascore_find_league_events(dt, league_name, country_name)
+        sofa_events = [e for e in sofa_events
+                       if (e.get("status", {}) or {}).get("type") == "notstarted"]
+        if sofa_events:
+            norm = [sofascore_normalize_event(e) for e in sofa_events[:lim]]
+            meta = {
+                "sofa_tournament_id": norm[0].get("_sofa_tournament_id"),
+                "sofa_season_id": norm[0].get("_sofa_season_id"),
+            }
+            return norm, "Sofascore", None, meta
+
     if sel_code:
-        return api_matches(sel_code, dt, lim), "football-data.org (yedek)", None
-    return [], "Kaynak yok", None
+        return api_matches(sel_code, dt, lim), "football-data.org (yedek)", None, {}
+
+    if af_key and sel_af_id and not sel_code:
+        _hint = (
+            "API-Football (3 sorgu) VE Sofascore ikisi de boş döndü. En olası "
+            "sebep: API-Football'un ÜCRETSİZ planı bu ülke için GÜNCEL sezona "
+            "erişim vermiyor olabilir (belgelenmiş kısıt: büyük 8 lig dışındaki "
+            "ülkelerde ücretsiz plan sadece 2021-2023 sezonlarını destekliyor) "
+            "VE o tarihte gerçekten planlanmış Sofascore maçı da yok. "
+            "Doğrulamak için sidebar'dan Sezon'u 2023'e çekip tekrar dene."
+        )
+        return [], "API-Football + Sofascore (boş)", _hint, {}
+
+    return [], "Kaynak yok", None, {}
 
 
-def get_team_matches_dispatch(af_key, team_id, n, use_af):
+def get_team_matches_dispatch(af_key, team_id, n, source):
     """
-    KRİTİK DÜZELTME: Önceki versiyon AF veri döndürmediğinde (rate limit,
-    401, boş response) sessizce football-data.org'a "fallback" yapıyordu —
-    ama team_id burada AF'in kendi ID uzayında bir sayı, fd.org'un hiç
-    tanımadığı bir ID. fd.org bu ID ile eşleşme bulamayıp boş dönüyordu,
-    parse_form({}) da boş sözlük veriyordu, calc_xg() de boş form için
-    HER TAKIMDA sabit 1.2 varsayılanına düşüyordu — sonuç: hangi takımlar
-    oynarsa oynasın aynı xG, aynı Poisson dağılımı, hep aynı 1-0/1-1 skoru.
-    Artık: kaynak AF ise SADECE AF kullanılır, ID uzayı asla karışmaz.
-    AF gerçekten veri veremiyorsa boş liste döner ve bu açıkça UI'da
-    "form verisi yok" olarak işaretlenir — sahte/yanlış veriyle
-    doldurulmaz.
+    KRİTİK: 'source' ("af" | "sofa" | "fdorg") maçın hangi API'den
+    geldiğini belirtir. ID uzayı karışmasın diye — team_id her zaman o
+    KAYNAĞA ait bir ID'dir, farklı bir kaynağın fonksiyonuna asla
+    verilmez (önceki hatanın tekrarını önler).
     """
-    if use_af and af_key:
+    if source == "af" and af_key:
         raw = af_team_fixtures(af_key, team_id, n)
         norm = [af_normalize_fixture(fx) for fx in raw]
+        norm.sort(key=lambda m: m.get("utcDate", ""), reverse=True)
+        return norm[:n]
+    if source == "sofa":
+        raw = sofascore_team_last_events(team_id, n)
+        norm = [sofascore_normalize_event(e) for e in raw]
         norm.sort(key=lambda m: m.get("utcDate", ""), reverse=True)
         return norm[:n]
     return api_team_matches(team_id, n)
 
 
-def get_h2h_dispatch(af_key, use_af, team1_id, team2_id, mid, n):
+def get_h2h_dispatch(af_key, source, team1_id, team2_id, mid, n):
     """Aynı ID-uzayı düzeltmesi — bkz. get_team_matches_dispatch."""
-    if use_af and af_key:
+    if source == "af" and af_key:
         raw = af_h2h_fixtures(af_key, team1_id, team2_id, n)
         norm = [af_normalize_fixture(fx) for fx in raw]
+        norm.sort(key=lambda m: m.get("utcDate", ""), reverse=True)
+        return norm[:n]
+    if source == "sofa":
+        raw = sofascore_h2h_matches(mid, n)
+        norm = [sofascore_normalize_event(e) for e in raw]
         norm.sort(key=lambda m: m.get("utcDate", ""), reverse=True)
         return norm[:n]
     return api_h2h(mid, n)
 
 
-def get_standings_dispatch(af_key, use_af, sel_af_id, sel_season_year, sel_code):
-    """Aynı ID-uzayı düzeltmesi — kaynak AF ise fd.org'a asla düşülmez."""
-    if use_af and af_key and sel_af_id:
+def get_standings_dispatch(af_key, source, sel_af_id, sel_season_year, sel_code, sofa_meta=None):
+    """Aynı ID-uzayı düzeltmesi — kaynak ne ise SADECE o kaynak kullanılır."""
+    if source == "af" and af_key and sel_af_id:
         return af_standings_norm(af_key, sel_af_id, sel_season_year)
+    if source == "sofa" and sofa_meta:
+        return sofascore_standings(sofa_meta.get("sofa_tournament_id"), sofa_meta.get("sofa_season_id"))
     if sel_code:
         return api_standings(sel_code)
     return []
 
 
-def get_scorers_dispatch(af_key, use_af, sel_af_id, sel_season_year, sel_code):
-    """Aynı ID-uzayı düzeltmesi — kaynak AF ise fd.org'a asla düşülmez."""
-    if use_af and af_key and sel_af_id:
+def get_scorers_dispatch(af_key, source, sel_af_id, sel_season_year, sel_code, sofa_meta=None):
+    """Aynı ID-uzayı düzeltmesi — kaynak ne ise SADECE o kaynak kullanılır."""
+    if source == "af" and af_key and sel_af_id:
         return af_topscorers_norm(af_key, sel_af_id, sel_season_year)
+    if source == "sofa" and sofa_meta:
+        return sofascore_topscorers(sofa_meta.get("sofa_tournament_id"), sofa_meta.get("sofa_season_id"))
     if sel_code:
         return api_scorers(sel_code)
     return []
 
 
-
-
 # ══════════════════════════════════════════════════════════════════
+
 # SIDEBAR
 # ══════════════════════════════════════════════════════════════════
 with st.sidebar:
@@ -5049,12 +5253,20 @@ st.divider()
 # MAÇLARI ÇEK
 # ══════════════════════════════════════════════════════════════════
 if fetch_btn:
-    with st.spinner("📡 Maçlar çekiliyor (API-Football)..."):
-        matches, _match_source, _match_hint = get_matches_for_selection(
+    with st.spinner("📡 Maçlar çekiliyor (API-Football → Sofascore → fd.org)..."):
+        matches, _match_source, _match_hint, _sofa_meta = get_matches_for_selection(
             AF_KEY_DEFAULT, sel_all_leagues, sel_af_id, sel_season_year,
-            sel_code, sel_date.strftime("%Y-%m-%d"), max_match, league_index
+            sel_code, sel_date.strftime("%Y-%m-%d"), max_match, league_index,
+            league_name=sel_label, country_name=(sel_league_obj["country"] if sel_league_obj else None)
         )
-    _use_af = _match_source.startswith("API-Football") or _match_source.startswith("TÜM")
+    if _match_source.startswith("API-Football") or _match_source.startswith("TÜM"):
+        _source = "af"
+    elif _match_source.startswith("Sofascore"):
+        _source = "sofa"
+    elif _match_source.startswith("football-data.org"):
+        _source = "fdorg"
+    else:
+        _source = "none"
     st.session_state["match_source"] = _match_source
     if not matches:
         st.error(f"**{sel_date:%d.%m.%Y} · {sel_label or 'TÜM LİGLER'}** için "
@@ -5067,8 +5279,8 @@ if fetch_btn:
     st.session_state.analyses={}
     st.success(f"✅ {len(matches)} maç! · Kaynak: {_match_source}")
     with st.spinner("📊 Lig verileri..."):
-        standings = get_standings_dispatch(AF_KEY_DEFAULT, _use_af, sel_af_id, sel_season_year, sel_code)
-        scorers   = get_scorers_dispatch(AF_KEY_DEFAULT, _use_af, sel_af_id, sel_season_year, sel_code)
+        standings = get_standings_dispatch(AF_KEY_DEFAULT, _source, sel_af_id, sel_season_year, sel_code, _sofa_meta)
+        scorers   = get_scorers_dispatch(AF_KEY_DEFAULT, _source, sel_af_id, sel_season_year, sel_code, _sofa_meta)
         time.sleep(0.3)
     bar=st.progress(0)
     for i,m in enumerate(matches):
@@ -5078,10 +5290,10 @@ if fetch_btn:
         hn=m["homeTeam"]["name"]
         an=m["awayTeam"]["name"]
         bar.progress(i/len(matches),text=f"({i+1}/{len(matches)}) {hn} – {an}")
-        hf=parse_form(get_team_matches_dispatch(AF_KEY_DEFAULT, hid, n_form, _use_af), hid)
-        af=parse_form(get_team_matches_dispatch(AF_KEY_DEFAULT, aid, n_form, _use_af), aid)
+        hf=parse_form(get_team_matches_dispatch(AF_KEY_DEFAULT, hid, n_form, _source), hid)
+        af=parse_form(get_team_matches_dispatch(AF_KEY_DEFAULT, aid, n_form, _source), aid)
         time.sleep(0.3)
-        h2h=parse_h2h(get_h2h_dispatch(AF_KEY_DEFAULT, _use_af, hid, aid, mid, n_h2h), hid)
+        h2h=parse_h2h(get_h2h_dispatch(AF_KEY_DEFAULT, _source, hid, aid, mid, n_h2h), hid)
         time.sleep(0.3)
         # Madde: "asla sahte kesinlik üretme" — form verisi gerçekten boşsa
         # (API limiti/hata) bunu sessizce 1.2 varsayılan xG'ye gömüp her
