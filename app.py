@@ -623,6 +623,33 @@ def af_fixtures_by_date(af_key, date_str, league_id=None, season=None):
         return []
 
 
+@st.cache_data(ttl=120, show_spinner=False)
+def af_fixtures_by_range(af_key, league_id, date_from, date_to):
+    """
+    Madde 26 düzeltme: 'date' parametresi + zorunlu 'season' bazı liglerde
+    (kış/yaz sezon sınırı Türkiye/Norveç/Danimarka/Finlandiya gibi
+    ülkelerde AF'in iç sezon numarasıyla tam örtüşmeyebiliyor) sessizce
+    boş dönüyor. 'from'/'to' aralığı + SEZON BELİRTMEDEN sorgu, AF'in
+    sezonu tarihe göre kendi çözmesine izin verir — çok daha toleranslı.
+    Tek günlük aralık (date_from == date_to) olsa bile bu farklı bir
+    AF iç sorgu yoluna girer ve genelde daha güvenilir sonuç verir.
+    """
+    if not af_key or not league_id:
+        return []
+    try:
+        r = requests.get(f"{AF_BASE}/fixtures", headers={"x-apisports-key": af_key},
+                          params={"league": league_id, "from": date_from, "to": date_to},
+                          timeout=25)
+        if r.status_code == 429 or r.status_code == 499:
+            st.warning("⚠️ API-Football günlük istek limiti dolmuş olabilir.")
+            return []
+        if r.status_code != 200:
+            return []
+        return r.json().get("response", [])
+    except Exception:
+        return []
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def af_team_fixtures(af_key, team_id, n):
     if not af_key:
@@ -722,7 +749,18 @@ def get_matches_for_selection(af_key, sel_all_leagues, sel_af_id, sel_season_yea
     tarihe göre TÜM liglerdeki maçlar tek çağrıda gelir, veri kalitesine
     göre sıralanır (düşük kaliteli lig Premier League ile aynı güvende
     gösterilmez).
-    Dönen: (matches_normalized, source_label)
+
+    NOT (Türkiye/Norveç/Danimarka/Finlandiya vb. "boş" görünme sebebi):
+    API-Football'un ÜCRETSİZ planı, İngiltere/İspanya/Almanya/İtalya/
+    Fransa/Hollanda/Portekiz/Brezilya DIŞINDAKİ ülkeler için genelde
+    GÜNCEL sezona değil, sadece eski sezonlara (belgelenmiş: 2021-2023)
+    erişim veriyor. API bunu hatayla değil SESSİZCE BOŞ DİZİ ile
+    bildiriyor — bu yüzden önce sezon parametresiyle, o boş dönerse
+    sezonsuz tekrar deniyoruz; ikisi de boşsa gerçek nedeni üçüncü
+    döndürülen değerde ("hint") açıkça belirtiyoruz — "maç yok" diye
+    yanıltıcı bir sessizlik olmasın diye.
+
+    Dönen: (matches_normalized, source_label, hint_or_None)
     """
     if af_key:
         if sel_all_leagues:
@@ -733,17 +771,50 @@ def get_matches_for_selection(af_key, sel_all_leagues, sel_af_id, sel_season_yea
             dq_by_id = {l["league_id"]: l["data_quality"] for l in (league_index or [])}
             raw.sort(key=lambda fx: -dq_by_id.get((fx.get("league", {}) or {}).get("id"), 0))
             if raw:
-                return [af_normalize_fixture(fx) for fx in raw[:lim]], "TÜM LİGLER (API-Football)"
+                return [af_normalize_fixture(fx) for fx in raw[:lim]], "TÜM LİGLER (API-Football)", None
         elif sel_af_id:
             raw = af_fixtures_by_date(af_key, dt, league_id=sel_af_id, season=sel_season_year)
             raw = [fx for fx in raw
                    if (fx.get("fixture", {}) or {}).get("status", {}).get("short")
                    in ("NS", "TBD", "PST")]
             if raw:
-                return [af_normalize_fixture(fx) for fx in raw[:lim]], "API-Football"
+                return [af_normalize_fixture(fx) for fx in raw[:lim]], "API-Football", None
+
+            # Sezonlu sorgu boş döndü — sezon parametresini kaldırıp tekrar dene
+            # (AF bazı liglerde season eşleşmesinde katı davranıp yanlış/eksik
+            # season numarasında sessizce boş dönebiliyor)
+            raw2 = af_fixtures_by_date(af_key, dt, league_id=sel_af_id)
+            raw2 = [fx for fx in raw2
+                    if (fx.get("fixture", {}) or {}).get("status", {}).get("short")
+                    in ("NS", "TBD", "PST")]
+            if raw2:
+                return [af_normalize_fixture(fx) for fx in raw2[:lim]], "API-Football (sezonsuz sorgu)", None
+
+            # İkisi de boş — 'from'/'to' aralığıyla, sezon hiç belirtmeden
+            # dene. Bu AF'in sezonu tarihe göre kendi çözmesini sağlar ve
+            # kış/yaz sezon sınırındaki uyumsuzlukları (Türkiye, Norveç,
+            # Danimarka, Finlandiya gibi ülkelerde en sık görülen sebep) aşar.
+            raw3 = af_fixtures_by_range(af_key, sel_af_id, dt, dt)
+            raw3 = [fx for fx in raw3
+                    if (fx.get("fixture", {}) or {}).get("status", {}).get("short")
+                    in ("NS", "TBD", "PST")]
+            if raw3:
+                return [af_normalize_fixture(fx) for fx in raw3[:lim]], "API-Football (tarih aralığı sorgusu)", None
+
+            if not sel_code:
+                _hint = (
+                    "Üç farklı sorgu da (sezonlu / sezonsuz / tarih-aralığı) boş döndü. "
+                    "En olası sebep: API-Football'un ÜCRETSİZ planı bu ülke için GÜNCEL "
+                    "sezona erişim vermiyor olabilir (belgelenmiş kısıt: büyük 8 lig "
+                    "dışındaki ülkelerde ücretsiz plan sadece 2021-2023 sezonlarını "
+                    "destekliyor). Doğrulamak için sidebar'dan Sezon'u 2023'e çekip "
+                    "tekrar dene — o zaman maç görünüyorsa kısıt bu; API-Football Pro "
+                    "plana geçmeden güncel sezon için bu ülkede veri çekilemez."
+                )
+                return [], "API-Football (boş)", _hint
     if sel_code:
-        return api_matches(sel_code, dt, lim), "football-data.org (yedek)"
-    return [], "Kaynak yok"
+        return api_matches(sel_code, dt, lim), "football-data.org (yedek)", None
+    return [], "Kaynak yok", None
 
 
 def get_team_matches_dispatch(af_key, team_id, n, use_af):
@@ -4979,7 +5050,7 @@ st.divider()
 # ══════════════════════════════════════════════════════════════════
 if fetch_btn:
     with st.spinner("📡 Maçlar çekiliyor (API-Football)..."):
-        matches, _match_source = get_matches_for_selection(
+        matches, _match_source, _match_hint = get_matches_for_selection(
             AF_KEY_DEFAULT, sel_all_leagues, sel_af_id, sel_season_year,
             sel_code, sel_date.strftime("%Y-%m-%d"), max_match, league_index
         )
@@ -4988,6 +5059,8 @@ if fetch_btn:
     if not matches:
         st.error(f"**{sel_date:%d.%m.%Y} · {sel_label or 'TÜM LİGLER'}** için "
                  f"planlanmış maç bulunamadı. (Denenen kaynak: {_match_source})")
+        if _match_hint:
+            st.warning(_match_hint)
         st.stop()
     st.session_state.matches=matches
     st.session_state.mdata={}
