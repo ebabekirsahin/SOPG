@@ -779,7 +779,7 @@ def sofascore_scheduled_events(date_str):
 def _sofa_text_match(name1, name2):
     def norm(s):
         s = (s or "").lower().strip()
-        for a, b in {"ü":"u","ö":"o","ç":"c","ş":"s","ğ":"g","ı":"i"}.items():
+        for a, b in {"ü":"u","ö":"o","ç":"c","ş":"s","ğ":"g","ı":"i","İ":"i"}.items():
             s = s.replace(a, b)
         return s
     n1, n2 = norm(name1), norm(name2)
@@ -788,15 +788,61 @@ def _sofa_text_match(name1, name2):
     return n1 == n2 or n1 in n2 or n2 in n1
 
 
+def _sofa_tournament_names(tour):
+    """
+    Bir event'in turnuva adını iki olası alandan da dener:
+    tournament.name (genelde lig adı) VE tournament.uniqueTournament.name
+    (bazı sporlarda/liglerde asıl kalıcı isim burada olur — sponsor adı
+    değişse bile aynı kalır, örn. 'Süper Lig' vs 'Trendyol Süper Lig').
+    """
+    names = []
+    if tour.get("name"):
+        names.append(tour["name"])
+    ut = tour.get("uniqueTournament") or {}
+    if ut.get("name"):
+        names.append(ut["name"])
+    return names
+
+
 def sofascore_find_league_events(date_str, league_name, country_name):
     events = sofascore_scheduled_events(date_str)
     matched = []
     for ev in events:
         tour = ev.get("tournament", {}) or {}
-        t_name = tour.get("name", "")
-        if _sofa_text_match(t_name, league_name):
+        cat  = tour.get("category", {}) or {}
+        names = _sofa_tournament_names(tour)
+        name_hit = any(_sofa_text_match(n, league_name) for n in names)
+        if name_hit:
+            # İsim tutuyorsa ülke de biliniyorsa çapraz kontrol et (aynı isimli
+            # farklı ülkelerin liglerini karıştırmamak için) — ülke bilgisi
+            # yoksa veya tutmuyorsa yine de kabul et (isim eşleşmesi yeterli).
+            if country_name and cat.get("name") and not _sofa_text_match(cat.get("name"), country_name):
+                continue
             matched.append(ev)
     return matched
+
+
+def sofascore_debug_tournament_names(date_str, limit=40):
+    """
+    Teşhis amaçlı: o tarihte Sofascore'un GERÇEKTEN döndürdüğü turnuva
+    adlarının (ülke ile birlikte) bir listesini verir. 'Boş' hatası
+    alındığında kör atış yapmak yerine kullanıcıya gerçek isimleri
+    gösterebilmek için.
+    """
+    events = sofascore_scheduled_events(date_str)
+    seen = set()
+    out = []
+    for ev in events:
+        tour = ev.get("tournament", {}) or {}
+        cat = tour.get("category", {}) or {}
+        for n in _sofa_tournament_names(tour):
+            key = (n, cat.get("name", ""))
+            if key not in seen:
+                seen.add(key)
+                out.append(f"{n} ({cat.get('name','?')})")
+        if len(out) >= limit:
+            break
+    return out
 
 
 def sofascore_normalize_event(ev):
@@ -986,9 +1032,10 @@ def get_matches_for_selection(af_key, sel_all_leagues, sel_af_id, sel_season_yea
                 return [af_normalize_fixture(fx) for fx in raw3[:lim]], "API-Football (tarih aralığı sorgusu)", None, {}
 
     # API-Football üç sorguda da boş döndü (veya key yok) — Sofascore'a düş.
+    _sofa_name_matched_but_no_upcoming = False
     if league_name:
-        sofa_events = sofascore_find_league_events(dt, league_name, country_name)
-        sofa_events = [e for e in sofa_events
+        sofa_events_all = sofascore_find_league_events(dt, league_name, country_name)
+        sofa_events = [e for e in sofa_events_all
                        if (e.get("status", {}) or {}).get("type") == "notstarted"]
         if sofa_events:
             norm = [sofascore_normalize_event(e) for e in sofa_events[:lim]]
@@ -997,19 +1044,47 @@ def get_matches_for_selection(af_key, sel_all_leagues, sel_af_id, sel_season_yea
                 "sofa_season_id": norm[0].get("_sofa_season_id"),
             }
             return norm, "Sofascore", None, meta
+        if sofa_events_all:
+            # İsim eşleşti ama o tarihte "henüz başlamamış" statüsünde maç yok
+            # (belki o gün ara var, belki bulunanlar zaten bitmiş/canlı).
+            _sofa_name_matched_but_no_upcoming = True
 
     if sel_code:
         return api_matches(sel_code, dt, lim), "football-data.org (yedek)", None, {}
 
     if af_key and sel_af_id and not sel_code:
-        _hint = (
-            "API-Football (3 sorgu) VE Sofascore ikisi de boş döndü. En olası "
-            "sebep: API-Football'un ÜCRETSİZ planı bu ülke için GÜNCEL sezona "
-            "erişim vermiyor olabilir (belgelenmiş kısıt: büyük 8 lig dışındaki "
-            "ülkelerde ücretsiz plan sadece 2021-2023 sezonlarını destekliyor) "
-            "VE o tarihte gerçekten planlanmış Sofascore maçı da yok. "
-            "Doğrulamak için sidebar'dan Sezon'u 2023'e çekip tekrar dene."
-        )
+        if _sofa_name_matched_but_no_upcoming:
+            _hint = (
+                "Sofascore'da '{lg}' adıyla eşleşen turnuva bulundu ama o tarihte "
+                "'henüz başlamamış' statüsünde maç yok (belki lig arası, belki "
+                "bulunan maçlar zaten bitmiş/canlı). API-Football da 3 sorguda "
+                "boş döndü. Tarihi kontrol et — seçtiğin günde gerçekten fikstür "
+                "var mı?"
+            ).format(lg=league_name)
+        else:
+            _debug_names = sofascore_debug_tournament_names(dt, limit=25)
+            if _debug_names:
+                _names_txt = " | ".join(_debug_names[:15])
+                _hint = (
+                    f"Sofascore o tarih için veri döndürdü ama içinde '{league_name}' "
+                    f"adıyla eşleşen bir turnuva YOK. Sofascore'un o gün bulduğu "
+                    f"gerçek turnuva adları (ülke ile): {_names_txt}"
+                    f"{' ...' if len(_debug_names) > 15 else ''}\n\n"
+                    f"Eğer listede aradığın ligin FARKLI bir isimle (örn. sponsor "
+                    f"adıyla) göründüğünü fark edersen, bunu bana söyle — eşleştirme "
+                    f"listesine ekleyeyim."
+                )
+            else:
+                _hint = (
+                    "Sofascore o tarih için HİÇ event döndürmedi (ağ hatası, "
+                    "rate limit veya o tarihte gerçekten dünya genelinde kayıtlı "
+                    "maç yok gibi görünüyor — son ihtimal pek olası değil). "
+                    "API-Football da 3 sorguda boş döndü. En olası sebep: "
+                    "API-Football'un ÜCRETSİZ planı bu ülke için GÜNCEL sezona "
+                    "erişim vermiyor olabilir (büyük 8 lig dışındaki ülkelerde "
+                    "ücretsiz plan sadece 2021-2023 sezonlarını destekliyor). "
+                    "Doğrulamak için sidebar'dan Sezon'u 2023'e çekip tekrar dene."
+                )
         return [], "API-Football + Sofascore (boş)", _hint, {}
 
     return [], "Kaynak yok", None, {}
