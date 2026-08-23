@@ -745,7 +745,9 @@ _SOFA_HEADERS = {
     "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
                   "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
     "Accept": "application/json",
+    "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://www.sofascore.com/",
+    "Origin": "https://www.sofascore.com",
 }
 
 _SOFA_STATUS_MAP = {
@@ -763,16 +765,51 @@ def sofascore_scheduled_events(date_str):
     ülkenin maçlarını tek çağrıda döndürür). API-Football'un ücretsiz
     plan kısıtına (büyük 8 lig dışı ülkelerde güncel sezona erişim yok)
     takılan durumlarda son çare olarak kullanılır.
+
+    ÖNEMLİ: Tüm dünyada o gün için sıfır event dönmesi gerçekçi değil —
+    bu neredeyse her zaman bir İSTEK HATASIDIR (403 bot koruması, rate
+    limit, ağ hatası, beklenmeyen yanıt formatı), "o gün dünya genelinde
+    maç yok" değil. Bu yüzden hatayı sessizce yutmak yerine gerçek HTTP
+    durumunu/istisnayı görünür şekilde bildiriyoruz.
     """
     try:
         r = requests.get(
             f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{date_str}",
             headers=_SOFA_HEADERS, timeout=20
         )
-        if r.status_code != 200:
+        if r.status_code == 403:
+            st.warning("⚠️ Sofascore isteği ENGELLENDİ (HTTP 403) — muhtemelen bot koruması "
+                       "(Cloudflare) sunucunun IP'sini engelliyor. Bu, kodda düzeltilemeyen "
+                       "bir ağ/IP kısıtı; Streamlit Cloud'un paylaşımlı IP'si sık sık bu "
+                       "tür korumalara takılabiliyor.")
             return []
-        return r.json().get("events", [])
-    except Exception:
+        if r.status_code == 429:
+            st.warning("⚠️ Sofascore rate limit (HTTP 429) — çok sık istek atılmış, birazdan tekrar dene.")
+            return []
+        if r.status_code != 200:
+            st.warning(f"⚠️ Sofascore beklenmeyen HTTP durumu: {r.status_code} "
+                       f"(yanıt: {r.text[:150]!r})")
+            return []
+        try:
+            data = r.json()
+        except Exception:
+            st.warning("⚠️ Sofascore JSON olarak parse edilemeyen bir yanıt döndürdü "
+                       "(muhtemelen bot-koruma HTML sayfası döndü, gerçek veri değil).")
+            return []
+        events = data.get("events")
+        if events is None:
+            st.warning(f"⚠️ Sofascore yanıtında beklenen 'events' alanı yok. "
+                       f"Yanıtın anahtarları: {list(data.keys())[:10]}")
+            return []
+        return events
+    except requests.exceptions.Timeout:
+        st.warning("⚠️ Sofascore isteği zaman aşımına uğradı (20sn).")
+        return []
+    except requests.exceptions.ConnectionError as e:
+        st.warning(f"⚠️ Sofascore'a bağlanılamadı (ağ hatası): {e}")
+        return []
+    except Exception as e:
+        st.warning(f"⚠️ Sofascore isteğinde beklenmeyen hata: {type(e).__name__}: {e}")
         return []
 
 
