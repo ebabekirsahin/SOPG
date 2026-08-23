@@ -1,4 +1,5 @@
 import streamlit as st
+import pandas as pd
 import requests
 import math
 import time
@@ -5513,6 +5514,101 @@ if all_btn:
         time.sleep(0.3)
         bar2.empty()
         st.success("✅ Tümü tamamlandı!")
+
+# ══════════════════════════════════════════════════════════════════
+# MAÇ TARAMA — İY Skor & Dönüş Olasılıkları (madde: kullanıcı isteği)
+# Groq analiz beklemez — 'Maçları Çek' anında hesaplanmış Poisson/istatistik
+# verisinden anında üretilir. İY 2-1/1-2/2-2 gibi yüksek-varyans skorları
+# ve İY/MS dönüş (2/1, 1/2) potansiyeli yüksek maçları öne çıkarır; BANKO
+# (kural bazlı yüksek güven) ve NORMAL seçenekleri ayrı gösterir.
+# ══════════════════════════════════════════════════════════════════
+def _ht_score_pct(top_ht, hg, ag):
+    for (h2, a2), v in top_ht:
+        if h2 == hg and a2 == ag:
+            return round(v, 1)
+    return 0.0
+
+
+if st.session_state.matches and st.session_state.mdata:
+    st.markdown("### 🎯 Maç Tarama — İY Skor & Dönüş Olasılıkları")
+    st.caption("Groq analizi beklemez, 'Maçları Çek' sonrası anında hesaplanır. "
+               "İY 2-1 / 1-2 / 2-2 gibi yüksek-varyans skorlar ve İY/MS dönüş "
+               "(2/1, 1/2) olasılığı yüksek maçlar 🎲 ile işaretlenir; kural bazlı "
+               "yüksek güven kriterlerini karşılayanlar 🟢 BANKO, geri kalanı "
+               "🟡 NORMAL olarak etiketlenir (bkz. classify_confidence — LLM "
+               "metnine değil hesaplanan sayılara dayanır).")
+
+    _screen_rows = []
+    for _mid, _d in st.session_state.mdata.items():
+        _m = _d["match"]
+        _hn = _m["homeTeam"]["name"]; _an = _m["awayTeam"]["name"]
+        _stats = _d.get("stats", {})
+        _top_ht = _d.get("top_ht", [])
+        _ht21 = _ht_score_pct(_top_ht, 2, 1)
+        _ht12 = _ht_score_pct(_top_ht, 1, 2)
+        _ht22 = _ht_score_pct(_top_ht, 2, 2)
+        _rev21 = _stats.get("rev21", 0)
+        _rev12 = _stats.get("rev12", 0)
+        try:
+            _ranked = build_confidence_ranked_picks(
+                _stats, _d.get("odds_analysis"), _d.get("hf", {}), _d.get("af", {}),
+                _d.get("h2h", {}), _hn, _an, pattern_data=_d.get("pattern_data")
+            )
+        except Exception:
+            _ranked = []
+        _top_pick = _ranked[0] if _ranked else None
+        _variance_score = max(_ht21, _ht12, _ht22, _rev21, _rev12)
+        if _top_pick and _top_pick["label"] == "GÜÇLÜ":
+            _etiket = "🟢 BANKO"
+        elif _variance_score >= 8:
+            _etiket = "🎲 YÜKSEK VARYANS / DÖNÜŞ"
+        else:
+            _etiket = "🟡 NORMAL"
+        _screen_rows.append({
+            "Maç": f"{_hn} — {_an}",
+            "İY 2-1 %": _ht21, "İY 1-2 %": _ht12, "İY 2-2 %": _ht22,
+            "Dönüş 2/1 %": _rev21, "Dönüş 1/2 %": _rev12,
+            "En Güçlü Bahis": (f"{_top_pick['market']} (%{_top_pick['pct']:.0f})"
+                               if _top_pick else "-"),
+            "Etiket": _etiket,
+            "_mid": _mid,
+        })
+
+    _c1, _c2 = st.columns([2, 1])
+    with _c1:
+        _filter_pick = st.radio(
+            "Filtre",
+            ["Tümü", "🎲 Yüksek Varyans (İY 2-1/1-2/2-2 + Dönüş)", "🟢 Banko", "🟡 Normal"],
+            horizontal=True, key="screen_filter"
+        )
+    with _c2:
+        _sort_key = st.selectbox(
+            "Sırala",
+            ["İY 2-1 %", "İY 1-2 %", "İY 2-2 %", "Dönüş 2/1 %", "Dönüş 1/2 %"],
+            key="screen_sort"
+        )
+
+    if _filter_pick.startswith("🎲"):
+        _filtered = [r for r in _screen_rows if r["Etiket"].startswith("🎲")]
+    elif _filter_pick.startswith("🟢"):
+        _filtered = [r for r in _screen_rows if r["Etiket"].startswith("🟢")]
+    elif _filter_pick.startswith("🟡"):
+        _filtered = [r for r in _screen_rows if r["Etiket"].startswith("🟡")]
+    else:
+        _filtered = list(_screen_rows)
+
+    _filtered.sort(key=lambda r: -r[_sort_key])
+
+    if _filtered:
+        _df = pd.DataFrame([{k: v for k, v in r.items() if k != "_mid"} for r in _filtered])
+        st.dataframe(_df, use_container_width=True, hide_index=True)
+        st.caption(f"{len(_filtered)}/{len(_screen_rows)} maç gösteriliyor. "
+                   "Bu tablo istatistiksel bir tarama aracıdır, kesinlik iddia etmez — "
+                   "her maçın altındaki tam analiz için aşağıdaki listeden ilgili maçı aç.")
+    else:
+        st.info("Bu filtreye uyan maç yok.")
+
+    st.divider()
 
 # ══════════════════════════════════════════════════════════════════
 # MAÇ LİSTESİ
