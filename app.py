@@ -71,14 +71,12 @@ def _get_secret(name, env_fallback=None):
         pass
     return os.environ.get(env_fallback or name)
 
-FD_KEY               = _get_secret("FD_KEY", "FOOTBALL_DATA_KEY") or "5cc88bf0dbac4fb699482886eb4c2270"
-AF_KEY_DEFAULT        = _get_secret("AF_KEY", "API_FOOTBALL_KEY") or "b30caea6f2a4c305ff317308de0b917d"
-GROQ_KEY              = _get_secret("GROQ_KEY", "GROQ_API_KEY") or "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"
-ODDS_API_KEY_DEFAULT  = _get_secret("ODDS_API_KEY", "THE_ODDS_API_KEY") or "4d4d08c88873623761e05df66d0aeb07"
-# ⚠️ Yukarıdaki değerler fallback (sabit) key'ler — Streamlit Cloud Secrets
-# panelinden bir key girersen o öncelikli kullanılır. Repo PUBLIC ise bu
-# satırları silip sadece Secrets panelini kullan; bu key'ler zaten bir kez
-# sohbette paylaşıldığı için önerim rotate etmen.
+# Kimlik bilgileri yalnızca Streamlit Secrets veya ortam değişkenlerinden okunur.
+# Kaynak kodunda sabit/fallback API anahtarı bulundurulmaz.
+FD_KEY               = _get_secret("FD_KEY", "FOOTBALL_DATA_KEY")
+AF_KEY_DEFAULT       = _get_secret("AF_KEY", "API_FOOTBALL_KEY")
+GROQ_KEY             = _get_secret("GROQ_KEY", "GROQ_API_KEY")
+ODDS_API_KEY_DEFAULT = _get_secret("ODDS_API_KEY", "THE_ODDS_API_KEY")
 
 _REQUIRED_MISSING = [n for n, v in {"FD_KEY": FD_KEY, "GROQ_KEY": GROQ_KEY}.items() if not v]
 
@@ -1358,7 +1356,7 @@ border-radius:6px;padding:8px 10px;font-size:.73rem;color:#7a9ab8;line-height:1.
         st.caption("The Odds API bulamazsa fallback. Ücretsiz 100 istek/gün.")
         apifootball_key = st.text_input(
             "API-Football Key",
-            value=AF_KEY_DEFAULT,
+            value=AF_KEY_DEFAULT or "",
             type="password",
             placeholder="dashboard.api-football.com → API Key",
         )
@@ -2060,109 +2058,255 @@ def parse_h2h(matches, home_id):
 # ══════════════════════════════════════════════════════════════════
 
 def poi(lam, k):
-    lam = max(lam, 0.01)
-    return math.exp(-lam) * (lam**k) / math.factorial(k)
+    """Poisson PMF with input validation; does not fabricate a fallback rate."""
+    try:
+        lam = float(lam)
+        k = int(k)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    if not math.isfinite(lam) or lam < 0 or k < 0:
+        return 0.0
+    lam = max(lam, 1e-9)
+    try:
+        return math.exp(-lam) * (lam ** k) / math.factorial(k)
+    except (OverflowError, ValueError):
+        return 0.0
+
 
 def calc_xg(tf, of, is_home):
+    """Estimate a team's expected goals from available team and opponent form.
+
+    Missing data returns None instead of a generic fixed xG. Venue-specific
+    form, recency-weighted output and the opponent's goals-conceded rate are
+    combined with weights that depend on the local sample size.
     """
-    Eski versiyon: base*0.30 + loc*0.40 + opp*0.30 — üç farklı ortalamayı
-    hafif ağırlıklarla harmanlıyordu, bu da her maçı ~1.1-1.6 xG bandına
-    sıkıştırıp Poisson çıktısını hep 1-0/1-1/2-1'e yakınsatıyordu.
+    if not tf or not of or tf.get("n", 0) <= 0 or of.get("n", 0) <= 0:
+        return None
 
-    Yeni versiyon: ev/deplasman-özel VE yakın-tarih-ağırlıklı ortalamaya
-    çok daha yüksek ağırlık veriyor, rakibin savunma zaafını/gücünü tam
-    ağırlıkla katıyor, genel lig ortalamasına sadece veri azsa (n<5)
-    yaslanıyor. Sonuç: gerçekten güçlü bir takım gerçekten yüksek xG,
-    gerçekten zayıf bir rakip gerçekten yüksek xG_conceded üretir —
-    farklı maçlar artık farklı Poisson dağılımları verir.
-    """
-    if not tf:
-        return 1.2
+    league_anchor = 1.30
+    w_gf = tf.get("w_avg_gf", tf.get("avg_gf"))
+    if w_gf is None:
+        return None
 
-    n = tf.get("n", 0)
-    league_anchor = 1.30  # sadece veri azken hafif çapa, dominant faktör değil
-
-    # Yakın-tarih ağırlıklı genel form (recency-weighted, mevcutsa)
-    w_gf = tf.get("w_avg_gf", tf.get("avg_gf", league_anchor))
-
-    # Ev/deplasman-özel, mümkünse yakın-tarih ağırlıklı versiyonu kullan
     if is_home:
-        loc = tf.get("w_h_avg_gf") or tf.get("h_avg_gf") or w_gf
+        loc = tf.get("w_h_avg_gf")
+        if loc is None:
+            loc = tf.get("h_avg_gf")
         loc_n = tf.get("h_n", 0)
     else:
-        loc = tf.get("w_a_avg_gf") or tf.get("a_avg_gf") or w_gf
+        loc = tf.get("w_a_avg_gf")
+        if loc is None:
+            loc = tf.get("a_avg_gf")
         loc_n = tf.get("a_n", 0)
+    if loc is None or loc_n <= 0:
+        loc = w_gf
 
-    opp_gc = of.get("avg_gc", league_anchor) if of else league_anchor
+    opp_gc = of.get("w_avg_gc", of.get("avg_gc"))
+    if opp_gc is None:
+        return None
 
-    # Veri azsa (loc_n < 3 ev/dep maçı) genel forma daha çok güven;
-    # veri yeterliyse (>=5) ev/deplasman-özel değer baskın olsun.
-    loc_weight = min(0.60, 0.20 + loc_n * 0.08)  # 0 maç->0.20, 5+ maç->0.60
+    loc_weight = min(0.60, 0.20 + max(0, loc_n) * 0.08)
     gen_weight = 0.35
-    opp_weight = 0.45  # rakip savunmasının etkisi tam ağırlıkla kalsın
-
-    # az veri varsa (n<5) lig çapasına küçük bir pay ver
-    anchor_weight = 0.15 if n < 5 else 0.0
+    opp_weight = 0.45
+    anchor_weight = 0.15 if min(tf.get("n", 0), of.get("n", 0)) < 5 else 0.0
     total_w = loc_weight + gen_weight + opp_weight + anchor_weight
+    xg = (float(loc) * loc_weight + float(w_gf) * gen_weight
+          + float(opp_gc) * opp_weight + league_anchor * anchor_weight) / total_w
+    if not math.isfinite(xg):
+        return None
+    return round(max(0.25, min(4.5, xg)), 3)
 
-    xg = (loc * loc_weight + w_gf * gen_weight + opp_gc * opp_weight
-          + league_anchor * anchor_weight) / total_w
 
-    return max(0.25, min(4.5, round(xg, 3)))
+def calc_ht_xg(team_form, opponent_form, xg):
+    """Estimate first-half xG from both teams' observed HT attack/defence data.
 
-def calc_ht_xg(f, xg):
+    Historical first-half scoring and conceding rates are blended with 43% of
+    the full-match xG. The empirical influence grows with sample size, while
+    the result is capped at 65% of full-match xG so the second-half rate remains
+    non-negative. Missing observations return None instead of a fixed default.
     """
-    İlk yarı xG'sini maç sonu xG'sinden basitçe %43 oranla türetmek yerine
-    (eski davranış) — takımın GERÇEKTEN ölçülen ilk yarı gol ortalamasını
-    kullan. Bu veri football-data.org'dan gerçekten geliyor (halfTime score),
-    uydurma değil. Yeterli örnek yoksa (n<5) maç sonu oranıyla harmanla.
+    if not team_form or not opponent_form or xg is None:
+        return None
+    try:
+        n_team = int(team_form.get("n", 0) or 0)
+        n_opp = int(opponent_form.get("n", 0) or 0)
+        ht_for = team_form.get("ht_avg_gf")
+        ht_against = opponent_form.get("ht_avg_gc")
+        full_xg = float(xg)
+        if n_team <= 0 or n_opp <= 0 or ht_for is None or ht_against is None:
+            return None
+        empirical = (float(ht_for) + float(ht_against)) / 2.0
+        n_eff = min(n_team, n_opp)
+        blend_w = min(0.75, n_eff / (n_eff + 5.0))
+        baseline = full_xg * 0.43
+        estimate = empirical * blend_w + baseline * (1.0 - blend_w)
+        estimate = max(0.01, min(estimate, full_xg * 0.65))
+        return round(estimate, 3)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _score_grid_limit(*lambdas):
+    valid = [max(0.0, float(x)) for x in lambdas if x is not None and math.isfinite(float(x))]
+    peak = max(valid, default=1.5)
+    # Include high-score tails, while placing a practical bound on computation.
+    return max(8, min(14, int(math.ceil(peak + 7 * math.sqrt(max(peak, 0.01)) + 2))))
+
+
+def _poisson_1d(lam, mx):
+    vals = [poi(lam, k) for k in range(mx + 1)]
+    coverage = sum(vals)
+    if coverage <= 0:
+        return [1.0] + [0.0] * mx, 0.0
+    return [v / coverage for v in vals], min(1.0, coverage)
+
+
+def score_mat(hx, ax, mx=None):
+    """Scoreline probabilities in percent across a sufficiently wide score grid.
+
+    If mx is omitted, the grid adapts to the xG inputs (minimum 0..8,
+    maximum 0..14). Probabilities are normalized over the displayed grid;
+    the joint model separately reports the theoretical coverage of that grid.
     """
-    if not f or f.get("n", 0) == 0:
-        return max(0.18, round(xg * 0.43, 3))
-    n = f.get("n", 0)
-    real_ht = f.get("ht_avg_gf", xg * 0.43)
-    if n >= 5:
-        return max(0.15, round(real_ht, 3))
-    # az örnek: gerçek İY ortalaması ile genel türetimi karıştır
-    blend_w = n / 5.0
-    return max(0.15, round(real_ht * blend_w + (xg * 0.43) * (1 - blend_w), 3))
+    try:
+        hx, ax = float(hx), float(ax)
+    except (TypeError, ValueError, OverflowError):
+        return {}
+    if not math.isfinite(hx) or not math.isfinite(ax) or hx < 0 or ax < 0:
+        return {}
+    if mx is None:
+        mx = _score_grid_limit(hx, ax)
+    mx = max(0, int(mx))
+    hp, _ = _poisson_1d(hx, mx)
+    ap, _ = _poisson_1d(ax, mx)
+    grid = {(h, a): hp[h] * ap[a] * 100.0
+            for h in range(mx + 1) for a in range(mx + 1)}
+    total = sum(grid.values())
+    if total > 0:
+        grid = {k: v * 100.0 / total for k, v in grid.items()}
+    return {k: round(v, 6) for k, v in grid.items()}
 
-def score_mat(hx, ax, mx=6):
-    return {(h,a): round(poi(hx,h)*poi(ax,a)*100, 3)
-            for h in range(mx+1) for a in range(mx+1)}
 
-def compute_stats(ms_mat, ht_mat):
-    p1 = round(sum(v for(h,a),v in ms_mat.items() if h>a), 1)
-    px = round(sum(v for(h,a),v in ms_mat.items() if h==a), 1)
-    p2 = round(100-p1-px, 1)
-    iy1= round(sum(v for(h,a),v in ht_mat.items() if h>a), 1)
-    iyx= round(sum(v for(h,a),v in ht_mat.items() if h==a), 1)
-    iy2= round(100-iy1-iyx, 1)
-    combos = {}
-    for ir,ip in [("1",iy1),("X",iyx),("2",iy2)]:
-        for mr,mp in [("1",p1),("X",px),("2",p2)]:
-            combos[f"{ir}/{mr}"] = round(ip*mp/100, 2)
-    cs = sorted(combos.items(), key=lambda x: -x[1])
-    u15 = round(sum(v for(h,a),v in ms_mat.items() if h+a>1), 1)
-    u25 = round(sum(v for(h,a),v in ms_mat.items() if h+a>2), 1)
-    u35 = round(sum(v for(h,a),v in ms_mat.items() if h+a>3), 1)
-    u45 = round(sum(v for(h,a),v in ms_mat.items() if h+a>4), 1)
-    kg  = round(sum(v for(h,a),v in ms_mat.items() if h>0 and a>0), 1)
-    ht_o05 = round(sum(v for(h,a),v in ht_mat.items() if h+a>0), 1)
-    ht_o15 = round(sum(v for(h,a),v in ht_mat.items() if h+a>1), 1)
+def compute_joint_score_model(hx, ax, h_htxg, a_htxg):
+    """Build a coherent HT → second-half → FT model and exact IY/MS outcomes.
+
+    Half-time score and second-half goals are modeled separately. Full-time
+    scores are the sum of those two states, so a team cannot lose goals after
+    half-time. Return probabilities for all 9 IY/MS combinations, including
+    exact 1/2 and 2/1 comeback probabilities, not products of independent
+    first-half and full-time marginals.
+    """
+    try:
+        hx, ax = float(hx), float(ax)
+        h_htxg, a_htxg = float(h_htxg), float(a_htxg)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not all(math.isfinite(v) and v >= 0 for v in (hx, ax, h_htxg, a_htxg)):
+        return None
+
+    # Keep the half-time rates compatible with the full-match goal budget.
+    # This preserves the final xG while preventing an impossible negative 2H rate.
+    h_htxg = min(max(h_htxg, 0.001), max(0.001, hx * 0.65))
+    a_htxg = min(max(a_htxg, 0.001), max(0.001, ax * 0.65))
+    h_2hxg = max(0.001, hx - h_htxg)
+    a_2hxg = max(0.001, ax - a_htxg)
+    mx = _score_grid_limit(hx, ax, h_htxg, a_htxg, h_2hxg, a_2hxg)
+
+    ht_mat = score_mat(h_htxg, a_htxg, mx)
+    sh_mat = score_mat(h_2hxg, a_2hxg, mx)
+    ms_accum = {}
+    combo_accum = {f"{iy}/{ms}": 0.0 for iy in ("1", "X", "2") for ms in ("1", "X", "2")}
+
+    def _result(hg, ag):
+        return "1" if hg > ag else ("2" if hg < ag else "X")
+
+    for (hh, ha), p_ht in ht_mat.items():
+        iy_result = _result(hh, ha)
+        for (sh, sa), p_sh in sh_mat.items():
+            p_joint = p_ht * p_sh / 100.0
+            final_h, final_a = hh + sh, ha + sa
+            key = (final_h, final_a)
+            ms_accum[key] = ms_accum.get(key, 0.0) + p_joint
+            combo_accum[f"{iy_result}/{_result(final_h, final_a)}"] += p_joint
+
+    total_ms = sum(ms_accum.values())
+    if total_ms > 0:
+        ms_mat = {k: round(v * 100.0 / total_ms, 6) for k, v in ms_accum.items()}
+    else:
+        ms_mat = {}
+    total_combo = sum(combo_accum.values())
+    if total_combo > 0:
+        combo_accum = {k: v * 100.0 / total_combo for k, v in combo_accum.items()}
+    combo_accum = {k: round(v, 6) for k, v in combo_accum.items()}
+
+    _, ht_h_cov = _poisson_1d(h_htxg, mx)
+    _, ht_a_cov = _poisson_1d(a_htxg, mx)
+    _, sh_h_cov = _poisson_1d(h_2hxg, mx)
+    _, sh_a_cov = _poisson_1d(a_2hxg, mx)
+    coverage = ht_h_cov * ht_a_cov * sh_h_cov * sh_a_cov * 100.0
+
     return {
-        "p1":p1,"px":px,"p2":p2,
-        "iy1":iy1,"iyx":iyx,"iy2":iy2,
-        "combos":cs,
-        "u15":u15,"alt15":round(100-u15,1),
-        "u25":u25,"alt25":round(100-u25,1),
-        "u35":u35,"alt35":round(100-u35,1),
-        "u45":u45,
-        "ht_o05":ht_o05,"ht_u05":round(100-ht_o05,1),
-        "ht_o15":ht_o15,"ht_u15":round(100-ht_o15,1),
-        "kg":kg,"kgy":round(100-kg,1),
-        "rev21":round(iy2*p1/100, 2),
-        "rev12":round(iy1*p2/100, 2),
+        "ms_mat": ms_mat,
+        "ht_mat": ht_mat,
+        "second_half_mat": sh_mat,
+        "combos": combo_accum,
+        "rev21": combo_accum.get("2/1", 0.0),
+        "rev12": combo_accum.get("1/2", 0.0),
+        "ht_xg_home": round(h_htxg, 3),
+        "ht_xg_away": round(a_htxg, 3),
+        "second_half_xg_home": round(h_2hxg, 3),
+        "second_half_xg_away": round(a_2hxg, 3),
+        "coverage_pct": round(coverage, 4),
+        "max_goals_per_half": mx,
+    }
+
+
+def compute_stats(ms_mat, ht_mat, joint_model=None):
+    if not ms_mat or not ht_mat:
+        return {"model_available": False, "coverage_pct": 0.0}
+
+    def _sum_pct(mat, pred):
+        return sum(v for (h, a), v in mat.items() if pred(h, a))
+
+    p1 = _sum_pct(ms_mat, lambda h, a: h > a)
+    px = _sum_pct(ms_mat, lambda h, a: h == a)
+    p2 = _sum_pct(ms_mat, lambda h, a: h < a)
+    iy1 = _sum_pct(ht_mat, lambda h, a: h > a)
+    iyx = _sum_pct(ht_mat, lambda h, a: h == a)
+    iy2 = _sum_pct(ht_mat, lambda h, a: h < a)
+
+    if joint_model and joint_model.get("combos"):
+        combos_dict = dict(joint_model["combos"])
+    else:
+        # Compatibility only; normal app flow always supplies joint_model.
+        combos_dict = {}
+        for iy, ip in (("1", iy1), ("X", iyx), ("2", iy2)):
+            for ms, mp in (("1", p1), ("X", px), ("2", p2)):
+                combos_dict[f"{iy}/{ms}"] = ip * mp / 100.0
+    combos = sorted(((k, round(v, 2)) for k, v in combos_dict.items()), key=lambda x: -x[1])
+
+    u15 = _sum_pct(ms_mat, lambda h, a: h + a > 1)
+    u25 = _sum_pct(ms_mat, lambda h, a: h + a > 2)
+    u35 = _sum_pct(ms_mat, lambda h, a: h + a > 3)
+    u45 = _sum_pct(ms_mat, lambda h, a: h + a > 4)
+    kg = _sum_pct(ms_mat, lambda h, a: h > 0 and a > 0)
+    ht_o05 = _sum_pct(ht_mat, lambda h, a: h + a > 0)
+    ht_o15 = _sum_pct(ht_mat, lambda h, a: h + a > 1)
+    return {
+        "model_available": True,
+        "p1": round(p1, 2), "px": round(px, 2), "p2": round(p2, 2),
+        "iy1": round(iy1, 2), "iyx": round(iyx, 2), "iy2": round(iy2, 2),
+        "combos": combos,
+        "u15": round(u15, 2), "alt15": round(max(0.0, 100 - u15), 2),
+        "u25": round(u25, 2), "alt25": round(max(0.0, 100 - u25), 2),
+        "u35": round(u35, 2), "alt35": round(max(0.0, 100 - u35), 2),
+        "u45": round(u45, 2),
+        "ht_o05": round(ht_o05, 2), "ht_u05": round(max(0.0, 100 - ht_o05), 2),
+        "ht_o15": round(ht_o15, 2), "ht_u15": round(max(0.0, 100 - ht_o15), 2),
+        "kg": round(kg, 2), "kgy": round(max(0.0, 100 - kg), 2),
+        "rev21": round(joint_model.get("rev21", combos_dict.get("2/1", 0.0)), 3) if joint_model else round(combos_dict.get("2/1", 0.0), 3),
+        "rev12": round(joint_model.get("rev12", combos_dict.get("1/2", 0.0)), 3) if joint_model else round(combos_dict.get("1/2", 0.0), 3),
+        "coverage_pct": joint_model.get("coverage_pct", 100.0) if joint_model else 100.0,
     }
 
 
@@ -2793,10 +2937,10 @@ def analyze_score_patterns(matched_rows, o1, ox, o2):
 
     from collections import Counter, defaultdict
 
-    n = len(matched_rows)
     ms_scores  = Counter()
     ht_scores  = Counter()
     results    = Counter()
+    valid_rows = 0
     ht_results = Counter()
     turnovers  = defaultdict(int)
     o15_hits = o25_hits = o35_hits = btts_hits = ht_o05_hits = ht_o15_hits = 0
@@ -2810,6 +2954,7 @@ def analyze_score_patterns(matched_rows, o1, ox, o2):
         except:
             continue
 
+        valid_rows += 1
         ms_scores[f"{fthg}-{ftag}"] += 1
         ht_scores[f"{hthg}-{htag}"] += 1
 
@@ -2834,6 +2979,10 @@ def analyze_score_patterns(matched_rows, o1, ox, o2):
         ht_total = hthg + htag
         if ht_total > 0: ht_o05_hits += 1
         if ht_total > 1: ht_o15_hits += 1
+
+    n = valid_rows
+    if n <= 0:
+        return None
 
     def pcts(counter, total):
         return {k: round(v/total*100, 1) for k,v in counter.most_common(10)}
@@ -2861,6 +3010,8 @@ def analyze_score_patterns(matched_rows, o1, ox, o2):
         "n": n,
         "ms_top":   ms_top,
         "ht_top":   ht_top,
+        "ms_all_pct": {k: round(v / n * 100, 2) for k, v in ms_scores.items()},
+        "ht_all_pct": {k: round(v / n * 100, 2) for k, v in ht_scores.items()},
         "res_pct":  res_pct,
         "htr_pct":  htr_pct,
         "trn_pct":  trn_pct,
@@ -4179,67 +4330,124 @@ def classify_confidence(model_pct, oa, hf, af, h2h, market_key=None, pattern_dat
 
 
 def build_confidence_ranked_picks(stats, oa, hf, af, h2h, h_name, a_name, pattern_data=None):
-    """
-    Score every core market with classify_confidence() and return them
-    ranked, so the UI shows the best real candidates instead of trusting
-    whatever the LLM chose to call 'BANKO' in free text.
-    """
+    """Rank market picks and reserve BANKO for high model probability + adequate form data."""
+    if not stats or not stats.get("model_available", True):
+        return []
     candidates = [
-        (f"{h_name} Kazanır (1)", stats["p1"], "1", None),
-        ("Beraberlik (X)",         stats["px"], "X", None),
-        (f"{a_name} Kazanır (2)", stats["p2"], "2", None),
-        ("2.5 Üst",                stats["u25"], None, "hist_o25"),
-        ("2.5 Alt",                stats["alt25"], None, None),
-        ("İlk Yarı 1.5 Üst",       stats.get("ht_o15", 0), None, "hist_ht_o15"),
-        ("KG VAR",                 stats["kg"], None, "hist_btts"),
-        ("KG YOK",                 stats["kgy"], None, None),
+        (f"{h_name} Kazanır (1)", stats.get("p1", 0), "1", None, "o1"),
+        ("Beraberlik (X)", stats.get("px", 0), "X", None, "ox"),
+        (f"{a_name} Kazanır (2)", stats.get("p2", 0), "2", None, "o2"),
+        (f"Çifte Şans 1X ({h_name} kaybetmez)", stats.get("p1", 0) + stats.get("px", 0), None, None, None),
+        (f"Çifte Şans X2 ({a_name} kaybetmez)", stats.get("px", 0) + stats.get("p2", 0), None, None, None),
+        ("Çifte Şans 12 (beraberlik yok)", stats.get("p1", 0) + stats.get("p2", 0), None, None, None),
+        ("2.5 Üst", stats.get("u25", 0), None, "hist_o25", "o25_ov"),
+        ("2.5 Alt", stats.get("alt25", 0), None, None, "o25_un"),
+        ("3.5 Üst", stats.get("u35", 0), None, "hist_o35", None),
+        ("KG VAR", stats.get("kg", 0), None, "hist_btts", None),
+        ("KG YOK", stats.get("kgy", 0), None, None, None),
+        ("İlk Yarı 1.5 Üst", stats.get("ht_o15", 0), None, "hist_ht_o15", None),
+        ("İlk Yarı 0.5 Alt", stats.get("ht_u05", 0), None, None, None),
     ]
+    n_h = hf.get("n", 0) if hf else 0
+    n_a = af.get("n", 0) if af else 0
+    form_ok = min(n_h, n_a) >= 5
+    coverage_ok = float(stats.get("coverage_pct", 0) or 0) >= 99.0
+    has_real_odds = bool(oa) and odds_provenance(oa.get("_source", "")).get("is_real", False)
+
     ranked = []
-    for label, pct, mkey, hist_key in candidates:
+    for label, pct, mkey, hist_key, odds_key in candidates:
+        pct = max(0.0, min(100.0, float(pct or 0.0)))
         conf = classify_confidence(pct, oa, hf, af, h2h, market_key=mkey,
                                    pattern_data=pattern_data, hist_key=hist_key)
-        ranked.append({"market": label, **conf})
-    ranked.sort(key=lambda x: (-x["score"], -x["pct"]))
+        # A market is a banko candidate only when its probability is high and
+        # both teams have enough real form data. A correct-score pick is never banko.
+        is_banko = pct >= 72.0 and form_ok and coverage_ok
+        if is_banko:
+            label_conf, emoji, cls = "GÜÇLÜ", "🟢", "banko"
+        elif pct >= 45:
+            label_conf, emoji, cls = "ORTA RİSK", "🟡", "orta"
+        else:
+            label_conf, emoji, cls = "YÜKSEK RİSK", "🔴", "risky"
+        actual_odds = None
+        if has_real_odds and odds_key and oa.get(odds_key) not in (None, "", 0):
+            try:
+                _price = float(oa[odds_key])
+                if math.isfinite(_price) and _price > 1.0:
+                    actual_odds = _price
+            except (TypeError, ValueError, OverflowError):
+                actual_odds = None
+        market_implied_pct = None
+        if actual_odds is not None:
+            # Prefer de-vigged 1X2 implied probabilities from analyze_odds().
+            _imp_key = {"1": "p1", "X": "px", "2": "p2"}.get(mkey)
+            if _imp_key and isinstance(oa.get("imp"), dict):
+                _imp_val = oa["imp"].get(_imp_key)
+                if _imp_val is not None:
+                    market_implied_pct = round(float(_imp_val), 2)
+            # For O/U 2.5, remove the book margin only if both sides' real prices exist.
+            elif odds_key in ("o25_ov", "o25_un"):
+                try:
+                    _over = float(oa.get("o25_ov"))
+                    _under = float(oa.get("o25_un"))
+                    if _over > 1 and _under > 1:
+                        _inv_over, _inv_under = 1.0 / _over, 1.0 / _under
+                        _sum_inv = _inv_over + _inv_under
+                        _chosen_inv = _inv_over if odds_key == "o25_ov" else _inv_under
+                        market_implied_pct = round(_chosen_inv / _sum_inv * 100.0, 2)
+                except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+                    market_implied_pct = None
+        value_edge_pct = (round(pct - market_implied_pct, 2)
+                          if market_implied_pct is not None else None)
+        reasons = list(conf.get("reasons", []))
+        if not form_ok:
+            reasons.append(f"Veri yetersiz: form örneklemi {n_h}/{n_a}; banko engellendi")
+        if not coverage_ok:
+            reasons.append(f"Skor kapsamı %{stats.get('coverage_pct', 0)}; banko engellendi")
+        ranked.append({
+            "market": label, "label": label_conf, "emoji": emoji, "cls": cls,
+            "pct": round(pct, 2), "score": conf.get("score", 0), "of": conf.get("of", 0),
+            "reasons": reasons, "odds": actual_odds, "has_real_odds": has_real_odds,
+            "market_implied_pct": market_implied_pct, "value_edge_pct": value_edge_pct,
+        })
+    ranked.sort(key=lambda x: (x["label"] != "GÜÇLÜ", -x["pct"], -x["score"]))
     return ranked
 
 
 def compute_final_score_pick(top_ms, top_ht, pattern_data=None, min_pattern_n=30):
-    """
-    Nihai MS/İY skor tahminini SADECE Poisson'un #1 satırı olarak vermek
-    yerine (bu, farklı maçların hep aynı 1-0/1-1/2-1'e yakınsamasının
-    sebeplerinden biriydi), varsa GERÇEK geçmiş-maç oran-pattern dağılımıyla
-    (analyze_score_patterns'ın ms_top/ht_top çıktısı — football-data.co.uk'nin
-    gerçek sezon verisinden hesaplanır, uydurma değil) ağırlıklı ortalar.
+    """Return full mathematical score rankings; historical frequencies stay separate.
 
-    pattern_data yoksa veya örneklem çok küçükse (< min_pattern_n) saf
-    Poisson'a döner — az veriyle "geçmiş pattern" iddiası yapılmaz.
+    Earlier code truncated candidate lists to the ten highest scores and blended
+    the score frequency of similar-odds matches into the model probability. That
+    made a historical frequency look like a Poisson probability. This function
+    now retains every score in the input distribution and reports the optional
+    historical sample percentage as a separate field.
     """
-    def _blend(top_list, pattern_key):
-        cands = {}
-        for (h, a), pct in top_list[:10]:
-            cands[f"{h}-{a}"] = {"poisson": pct}
-        pattern_w = 0.0
-        pattern_n = pattern_data.get("n", 0) if pattern_data else 0
+    pattern_n = pattern_data.get("n", 0) if pattern_data else 0
+
+    def build(top_list, historical_key):
+        hist = {}
         if pattern_data and pattern_n >= min_pattern_n:
-            pattern_w = min(0.45, pattern_n / 400)
-            for sc, pct in pattern_data.get(pattern_key, {}).items():
-                cands.setdefault(sc, {"poisson": 0})
-                cands[sc]["pattern"] = pct
-        blended = []
-        for sc, d in cands.items():
-            p_poi = d.get("poisson", 0)
-            p_pat = d.get("pattern", 0)
-            blended_pct = p_poi * (1 - pattern_w) + p_pat * pattern_w
-            blended.append({"score": sc, "pct": round(blended_pct, 1),
-                             "poisson_pct": round(p_poi, 1), "pattern_pct": round(p_pat, 1)})
-        blended.sort(key=lambda x: -x["pct"])
-        return blended, pattern_w, pattern_n
+            hist = pattern_data.get(historical_key, {}) or {}
+            if not hist:
+                hist = pattern_data.get("ms_top" if historical_key == "ms_all_pct" else "ht_top", {}) or {}
+        results = []
+        for (h, a), pct in top_list:
+            score = f"{h}-{a}"
+            hist_pct = hist.get(score) if pattern_n >= min_pattern_n else None
+            results.append({
+                "score": score,
+                "pct": round(float(pct), 3),
+                "poisson_pct": round(float(pct), 3),
+                "pattern_pct": round(float(hist_pct), 3) if hist_pct is not None else None,
+            })
+        results.sort(key=lambda x: -x["pct"])
+        return results
 
-    ms_blended, ms_pattern_w, ms_pattern_n = _blend(top_ms, "ms_top")
-    ht_blended, ht_pattern_w, ht_pattern_n = _blend(top_ht, "ht_top")
+    ms_probs = build(top_ms, "ms_all_pct")
+    ht_probs = build(top_ht, "ht_all_pct")
     return {
-        "ms": ms_blended, "ms_pattern_weight": ms_pattern_w, "ms_pattern_n": ms_pattern_n,
-        "ht": ht_blended, "ht_pattern_weight": ht_pattern_w, "ht_pattern_n": ht_pattern_n,
+        "ms": ms_probs, "ms_pattern_weight": 0.0, "ms_pattern_n": pattern_n,
+        "ht": ht_probs, "ht_pattern_weight": 0.0, "ht_pattern_n": pattern_n,
     }
 
 
@@ -4254,24 +4462,80 @@ def _score_result_class(score_str):
     return "X"
 
 
-def compute_surprise_score(ms_blended, min_gap=6):
-    """
-    'Sürpriz skor': en olası (top) skordan FARKLI bir sonuç kategorisine
-    (1/X/2) ait olan, ama yine de gerçek veriyle desteklenen (blended
-    listede yeterli payı olan) bir skor. Rastgele/keyfi bir düşük-oran
-    seçilmiyor — top_pick ile aynı kategori değilse VE min_gap üstü
-    olasılığı varsa aday olur.
-    """
+def compute_surprise_score(ms_blended, min_gap=0.1):
+    """Select a lower-probability, model-supported score, including high-goal outcomes."""
     if not ms_blended:
         return None
-    top = ms_blended[0]
-    top_class = _score_result_class(top["score"])
-    for cand in ms_blended[1:6]:
-        if cand["pct"] < min_gap:
+    ranked = sorted(ms_blended, key=lambda x: -float(x.get("pct", 0.0)))
+    top = ranked[0]
+    top_class = _score_result_class(top.get("score", ""))
+    # Check high-scoring outcomes across the full distribution, not just top 5.
+    for cand in ranked:
+        try:
+            hg, ag = (int(x) for x in cand["score"].split("-"))
+            pct = float(cand.get("pct", 0.0))
+        except Exception:
             continue
-        if _score_result_class(cand["score"]) != top_class:
+        if cand["score"] != top.get("score") and hg + ag >= 4 and min_gap <= pct <= 20:
+            return cand
+    for cand in ranked:
+        try:
+            pct = float(cand.get("pct", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if (cand.get("score") != top.get("score") and pct >= min_gap
+                and _score_result_class(cand.get("score", "")) != top_class):
             return cand
     return None
+
+
+def score_probability(score_rows, home_goals, away_goals):
+    """Return the model probability for an exact score from a score matrix/list."""
+    if isinstance(score_rows, dict):
+        return float(score_rows.get((int(home_goals), int(away_goals)), 0.0))
+    for item in score_rows or []:
+        try:
+            (h, a), pct = item
+            if int(h) == int(home_goals) and int(a) == int(away_goals):
+                return float(pct)
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
+def build_surprise_scenarios(top_ms, top_ht, stats):
+    """Rank special and high-goal scenarios by calculated model probability."""
+    candidates = []
+    spec = [
+        ("İY 2-1", "İY", 2, 1),
+        ("İY 1-2", "İY", 1, 2),
+        ("İY 2-2", "İY", 2, 2),
+        ("MS 3-3", "MS", 3, 3),
+    ]
+    seen = set()
+    for label, period, hg, ag in spec:
+        rows = top_ht if period == "İY" else top_ms
+        pct = score_probability(rows, hg, ag)
+        if pct >= 0.1:
+            candidates.append({"label": label, "pct": pct, "period": period, "score": f"{hg}-{ag}", "reason": "Özel skor senaryosu"})
+            seen.add((period, hg, ag))
+
+    combo_pct = dict(stats.get("combos", [])) if stats else {}
+    for combo, label in (("1/2", "İY/MS 1/2"), ("2/1", "İY/MS 2/1")):
+        pct = float(combo_pct.get(combo, 0.0))
+        if pct >= 0.1:
+            candidates.append({"label": label, "pct": pct, "period": "İY/MS", "score": combo, "reason": "Bir takım geriden gelerek kazanır"})
+
+    for (hg, ag), pct in (top_ms or []):
+        if hg + ag >= 4 and pct >= 0.1 and ("MS", hg, ag) not in seen:
+            candidates.append({"label": f"MS {hg}-{ag}", "pct": float(pct), "period": "MS", "score": f"{hg}-{ag}", "reason": "Yüksek toplam gol senaryosu"})
+
+    # Avoid repeated labels and make sure the UI never invents an odds figure.
+    unique = {}
+    for c in candidates:
+        if c["label"] not in unique or c["pct"] > unique[c["label"]]["pct"]:
+            unique[c["label"]] = c
+    return sorted(unique.values(), key=lambda c: -c["pct"])[:3]
 
 
 def render_vs_ui(match, hf, af, h2h, hxg, axg, h_htxg, a_htxg,
@@ -4620,6 +4884,65 @@ def render_vs_ui(match, hf, af, h2h, hxg, axg, h_htxg, a_htxg,
     combo_html += "</div></div>"
     st.markdown(combo_html, unsafe_allow_html=True)
 
+    # Critical scores are looked up in the complete grid, not just displayed top-N lists.
+    special_scores = [
+        ("İY", 0, 0), ("İY", 1, 0), ("İY", 0, 1), ("İY", 1, 1),
+        ("İY", 2, 0), ("İY", 0, 2), ("İY", 2, 1), ("İY", 1, 2),
+        ("İY", 2, 2), ("İY", 3, 0), ("İY", 0, 3), ("İY", 3, 1),
+        ("İY", 1, 3), ("İY", 3, 2), ("İY", 2, 3), ("İY", 3, 3),
+        ("MS", 3, 3),
+    ]
+    critical_html = '<div class="skor-panel"><div class="dp-section-title">🎯 KRİTİK SKORLAR — Her maç için ayrı olasılık</div><div class="skor-grid">'
+    for period, hg, ag in special_scores:
+        pct = score_probability(top_ht if period == "İY" else top_ms, hg, ag)
+        label = f"{period} {hg}-{ag}"
+        critical_html += (
+            '<div class="skor-box"><div class="sb-score">' + label +
+            '</div><div class="sb-pct">%' + f'{pct:.2f}' + '</div></div>'
+        )
+    critical_html += '</div><div style="font-size:.61rem;color:#4a6880;margin-top:6px">'
+    critical_html += f'İY/MS 1/2: <b>%{stats.get("rev12", 0):.2f}</b> · İY/MS 2/1: <b>%{stats.get("rev21", 0):.2f}</b> · '
+    critical_html += f'Model kapsama oranı: <b>%{stats.get("coverage_pct", 0):.3f}</b>'
+    critical_html += '</div></div>'
+    st.markdown(critical_html, unsafe_allow_html=True)
+
+    def _history_score_pct(period, score_text):
+        if not pattern_data or pattern_data.get("n", 0) < 30:
+            return "Yeterli geçmiş veri yok"
+        hist_key = "ht_all_pct" if period == "İY" else "ms_all_pct"
+        val = (pattern_data.get(hist_key) or {}).get(score_text)
+        return f"%{val:.2f}" if val is not None else "Bu skor için oran verisi yok"
+
+    _table_rows = []
+    _added = set()
+    for period, scores in (("İY", top_ht), ("MS", top_ms)):
+        selected = set()
+        if period == "İY":
+            selected.update((h, a) for _, h, a in special_scores if _ == "İY")
+        else:
+            selected.update((h, a) for _, h, a in special_scores if _ == "MS")
+            selected.update((h, a) for h in range(7) for a in range(7))
+        # Add the most likely scores too, including scores outside the 0..6 display grid.
+        selected.update((h, a) for (h, a), _pct in sorted(scores, key=lambda x: -x[1])[:12])
+        score_map = dict(scores)
+        for hg, ag in sorted(selected, key=lambda pair: (-score_map.get(pair, 0.0), pair[0] + pair[1], pair[0])):
+            pct = float(score_map.get((hg, ag), 0.0))
+            is_high_score = (hg + ag >= 4)
+            category = "SÜRPRİZ" if is_high_score or (period == "İY" and (hg, ag) in {(2, 1), (1, 2), (2, 2)}) else "NORMAL"
+            score_txt = f"{hg}-{ag}"
+            hist_val = _history_score_pct(period, score_txt)
+            _table_rows.append({
+                "Dönem": period, "Skor": score_txt,
+                "Model olasılığı (%)": round(pct, 3),
+                "Geçmiş benzer maç (%)": hist_val,
+                "Piyasa oranı": "Oran verisi yok",
+                "Kategori": category,
+            })
+    with st.expander("📊 Tam skor olasılık tabloları (İY kritik skorlar + MS 0-0–6-6)", expanded=False):
+        st.caption("Model yüzdesi Poisson/yarı-birleşik dağılımdan gelir. Geçmiş yüzdesi yalnızca en az 30 gerçek, benzer oranlı maç varsa gösterilir; kesin skor oranı kaynağı olmadığı için oran uydurulmaz.")
+        if _table_rows:
+            st.dataframe(pd.DataFrame(_table_rows), use_container_width=True, hide_index=True)
+
     rev21_m = stats['rev21']; rev21_h = h2h.get('rev21_pct',0)
     rev12_m = stats['rev12']; rev12_h = h2h.get('rev12_pct',0)
     hot21 = rev21_m > 10 or rev21_h > 20
@@ -4708,26 +5031,14 @@ def render_vs_ui(match, hf, af, h2h, hxg, axg, h_htxg, a_htxg,
             return (f'<div style="background:#0a1320;border:1px dashed #2a3a4a;border-radius:8px;'
                     f'padding:.5rem .8rem;font-size:.66rem;color:#4a6880">'
                     f'💣 {title} — bu kombinasyon geçmiş {pat_n} maçlık pattern verisinde görülmedi.</div>')
-        # Piyasa proxy: gerçek oran varsa implied İY-sonuç * implied MS-sonuç
-        # (bağımsızlık varsayımıyla — bu bir yaklaşıklıktır, açıkça belirtiliyor)
-        piyasa_pct = None
-        if odds_analysis and odds_analysis.get("imp"):
-            iy_r, ms_r = combo_key.split("/")
-            imp_map = {"1": "p1", "X": "px", "2": "p2"}
-            ms_imp = odds_analysis["imp"].get(imp_map.get(ms_r), None)
-            if ms_imp is not None:
-                piyasa_pct = round(ms_imp * 0.42, 1)  # İY payı kabaca ~%42 — kaba yaklaşıklık
-        edge = round(model_pct - (piyasa_pct or pat_pct), 1)
-        edge_line = f'Value: <b style="color:{"#3ecf7a" if edge>0 else "#f87171"}">{"+"if edge>=0 else ""}%{edge}</b>' if piyasa_pct else ""
         return f"""
 <div style="background:#0e0900;border:1px solid #b45309;border-radius:8px;padding:.6rem .9rem">
   <div style="font-size:.58rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
-  color:#f5a623;margin-bottom:4px">💣 VALUE + SÜRPRİZ — İY/MS {combo_key}</div>
+  color:#f5a623;margin-bottom:4px">💣 SÜRPRİZ SENARYO — İY/MS {combo_key}</div>
   <div style="font-size:.72rem;color:#a8c4d8;line-height:1.7">
-    Geçmiş benzer maç ({pat_n}): <b>%{pat_pct}</b><br>
-    Model: <b>%{model_pct:.1f}</b>
-    {f'&nbsp;·&nbsp; Piyasa (yaklaşık): <b>%{piyasa_pct}</b>' if piyasa_pct else ''}<br>
-    {edge_line}
+    Benzer gerçek oranlı maçlar ({pat_n}): <b>%{pat_pct}</b><br>
+    Matematiksel model: <b>%{model_pct:.2f}</b><br>
+    İY/MS pazar oranı verisi yok — değer avantajı hesaplanmadı.
   </div>
 </div>"""
 
@@ -4739,117 +5050,13 @@ def render_vs_ui(match, hf, af, h2h, hxg, axg, h_htxg, a_htxg,
     )
 
     def _build_iy_scores(hform, aform, ht_top):
-        from collections import defaultdict
-
-        h_htxg = hform.get("ht_avg_gf", 0.5) if hform else 0.5
-        a_htxg = aform.get("ht_avg_gf", 0.5) if aform else 0.5
-        h_n    = hform.get("n", 1) if hform else 1
-        a_n    = aform.get("n", 1) if aform else 1
-
-        h_ht_freq = hform.get("ht_score_freq", {}) if hform else {}
-        a_ht_freq = aform.get("ht_score_freq", {}) if aform else {}
-
-        def form_weight(n_matches):
-            return min(0.40, max(0.20, n_matches / 30))
-
-        h_fw = form_weight(h_n)
-        a_fw = form_weight(a_n)
-
-        scores = {}
-        for (hg, ag), prob in ht_top[:12]:
-            scores[f"{hg}-{ag}"] = {"pct": round(prob, 1), "why": ""}
-
-        for sc, info in h_ht_freq.items():
-            if info.get("count", 0) < 2:
-                continue
-            if sc in scores:
-                combined = round(scores[sc]["pct"] * (1 - h_fw) + info["pct"] * h_fw, 1)
-                scores[sc] = {"pct": combined, "why": f"Ev {info['count']}x"}
-            else:
-                scores[sc] = {"pct": round(info["pct"] * h_fw, 1),
-                              "why": f"Ev {info['count']}x"}
-
-        for sc, info in a_ht_freq.items():
-            if info.get("count", 0) < 2:
-                continue
-            parts = sc.split("-")
-            if len(parts) == 2:
-                rev_sc = f"{parts[1]}-{parts[0]}"
-                if rev_sc in scores:
-                    combined = round(scores[rev_sc]["pct"] * (1 - a_fw) + info["pct"] * a_fw, 1)
-                    old_why  = scores[rev_sc].get("why", "")
-                    scores[rev_sc] = {"pct": combined,
-                                      "why": f"{old_why} | Dep {info['count']}x".strip(" |")}
-                else:
-                    scores[rev_sc] = {"pct": round(info["pct"] * a_fw, 1),
-                                      "why": f"Dep {info['count']}x"}
-
-        filtered = {}
-        for sc, info in scores.items():
-            parts = sc.split("-")
-            if len(parts) != 2:
-                continue
-            try:
-                hg, ag = int(parts[0]), int(parts[1])
-            except:
-                continue
-            if hg + ag >= 3 and h_htxg + a_htxg < 1.5:
-                continue
-            if hg > 0 and ag > 0 and h_htxg < 0.3 and a_htxg < 0.3:
-                continue
-            filtered[sc] = info
-
-        sorted_scores = sorted(filtered.items(), key=lambda x: -x[1]["pct"])
-        return [{"score": sc, "pct": str(info["pct"]), "why": info.get("why", "")}
-                for sc, info in sorted_scores[:6] if info["pct"] >= 0.5]
+        # Probabilities already include form through xG; do not blend raw frequencies again.
+        return [{"score": f"{h}-{a}", "pct": str(round(float(pct), 2)), "why": "Poisson HT modeli"}
+                for (h, a), pct in sorted(ht_top, key=lambda x: -x[1])[:8]]
 
     def _build_ms_scores(hform, aform, ms_top):
-        h_avg_gf = hform.get("avg_gf", 1.2) if hform else 1.2
-        a_avg_gf = aform.get("avg_gf", 1.0) if aform else 1.0
-        h_n      = hform.get("n", 1) if hform else 1
-        a_n      = aform.get("n", 1) if aform else 1
-
-        h_ms_freq = hform.get("ms_score_freq", {}) if hform else {}
-        a_ms_freq = aform.get("ms_score_freq", {}) if aform else {}
-
-        def form_weight(n_matches):
-            return min(0.40, max(0.20, n_matches / 30))
-
-        h_fw = form_weight(h_n)
-        a_fw = form_weight(a_n)
-
-        scores = {}
-        for (hg, ag), prob in ms_top[:12]:
-            scores[f"{hg}-{ag}"] = {"pct": round(prob, 1), "why": ""}
-
-        for sc, info in h_ms_freq.items():
-            if info.get("count", 0) < 2:
-                continue
-            if sc in scores:
-                combined = round(scores[sc]["pct"] * (1 - h_fw) + info["pct"] * h_fw, 1)
-                scores[sc] = {"pct": combined, "why": f"Ev {info['count']}x"}
-            elif info["pct"] >= 5:
-                scores[sc] = {"pct": round(info["pct"] * h_fw, 1),
-                              "why": f"Ev {info['count']}x"}
-
-        for sc, info in a_ms_freq.items():
-            if info.get("count", 0) < 2:
-                continue
-            parts = sc.split("-")
-            if len(parts) == 2:
-                rev_sc = f"{parts[1]}-{parts[0]}"
-                if rev_sc in scores:
-                    old = scores[rev_sc]
-                    combined = round(old["pct"] * (1 - a_fw) + info["pct"] * a_fw, 1)
-                    scores[rev_sc] = {"pct": combined,
-                                      "why": f"{old.get('why','')} Dep {info['count']}x".strip()}
-                elif info["pct"] >= 5:
-                    scores[rev_sc] = {"pct": round(info["pct"] * a_fw, 1),
-                                      "why": f"Dep {info['count']}x"}
-
-        sorted_s = sorted(scores.items(), key=lambda x: -x[1]["pct"])
-        return [{"score": sc, "pct": str(round(info["pct"], 1)), "why": info.get("why", "")}
-                for sc, info in sorted_s[:8] if info["pct"] >= 1.0]
+        return [{"score": f"{h}-{a}", "pct": str(round(float(pct), 2)), "why": "HT + 2Y birleşik model"}
+                for (h, a), pct in sorted(ms_top, key=lambda x: -x[1])[:10]]
 
     iy_scores_combined = _build_iy_scores(hf, af, top_ht)
     ms_scores_combined = _build_ms_scores(hf, af, top_ms)
@@ -4857,7 +5064,7 @@ def render_vs_ui(match, hf, af, h2h, hxg, axg, h_htxg, a_htxg,
     if iy_scores_combined:
         st.markdown("""
 <div class="skor-panel">
-  <div class="dp-section-title">📊 GERÇEK SKOR DAĞILIMI — Form + Poisson Kombine</div>
+  <div class="dp-section-title">📊 MODEL SKOR DAĞILIMI — Poisson + Formdan türetilen xG</div>
 """, unsafe_allow_html=True)
         cols_i = st.columns(len(iy_scores_combined[:6]))
         for col, sc in zip(cols_i, iy_scores_combined[:6]):
@@ -4873,7 +5080,7 @@ def render_vs_ui(match, hf, af, h2h, hxg, axg, h_htxg, a_htxg,
     if ms_scores_combined:
         st.markdown("""
 <div class="skor-panel">
-  <div class="dp-section-title">📊 MS GERÇEK SKOR DAĞILIMI — Form + Poisson Kombine</div>
+  <div class="dp-section-title">📊 MS MODEL SKOR DAĞILIMI — İlk yarı + ikinci yarı</div>
 """, unsafe_allow_html=True)
         cols_m = st.columns(len(ms_scores_combined[:8]))
         for col, sc in zip(cols_m, ms_scores_combined[:8]):
@@ -4958,17 +5165,27 @@ padding:.5rem .8rem;margin-top:6px;font-size:.68rem;color:#4a6880">
     ms_top_pick  = final_scores["ms"][0] if final_scores["ms"] else None
     ht_top_pick  = final_scores["ht"][0] if final_scores["ht"] else None
     surprise     = compute_surprise_score(final_scores["ms"])
+    surprise_scenarios = build_surprise_scenarios(top_ms, top_ht, stats)
+    banko_pick = next((p for p in ranked_picks if p.get("label") == "GÜÇLÜ"), None)
+    normal_combo = stats.get("combos", [])[0] if stats.get("combos") else None
+    normal_rows = []
+    if ht_top_pick:
+        normal_rows.append((f"İY {ht_top_pick['score']}", float(ht_top_pick['pct'])))
+    if ms_top_pick:
+        normal_rows.append((f"MS {ms_top_pick['score']}", float(ms_top_pick['pct'])))
+    if normal_combo:
+        normal_rows.append((f"İY/MS {normal_combo[0]}", float(normal_combo[1])))
 
     ms_s = ms_top_pick["score"] if ms_top_pick else "?"
     iy_s = ht_top_pick["score"] if ht_top_pick else "?"
     ms_pct_disp = f"{ms_top_pick['pct']:.0f}" if ms_top_pick else "0"
     ht_pct_disp = f"{ht_top_pick['pct']:.0f}" if ht_top_pick else "0"
     _pattern_note = (
-        f"Poisson %{ms_top_pick['poisson_pct']:.0f} + geçmiş pattern %{ms_top_pick['pattern_pct']:.0f} "
-        f"({final_scores['ms_pattern_n']} benzer maç, ağırlık %{final_scores['ms_pattern_weight']*100:.0f})"
-        if ms_top_pick and final_scores["ms_pattern_weight"] > 0
-        else (f"Sadece Poisson (yeterli geçmiş-pattern örneklemi yok — "
-              f"{final_scores['ms_pattern_n']} maç < 30 eşik)" if ms_top_pick else "")
+        f"Model olasılığı %{ms_top_pick['poisson_pct']:.2f}; tarihsel benzer-oran sıklıkları tabloda ayrı gösterilir "
+        f"({final_scores['ms_pattern_n']} geçerli geçmiş maç)."
+        if ms_top_pick and final_scores["ms_pattern_n"] >= 30
+        else (f"Model olasılığı tarihsel yüzdelerle birleştirilmedi; yeterli geçmiş örneklem yok "
+              f"({final_scores['ms_pattern_n']} maç)." if ms_top_pick else "Model verisi yok.")
     )
 
     tav_html += f"""
@@ -4993,20 +5210,47 @@ padding:.5rem .8rem;margin-top:6px;font-size:.68rem;color:#4a6880">
 <div style="font-size:.6rem;color:#2a3a4a;margin-top:4px;padding:4px 2px">{_pattern_note}</div>"""
 
     if surprise:
+        _surprise_hist = (f"tarihsel benzer maç %{surprise['pattern_pct']:.2f}"
+                          if surprise.get("pattern_pct") is not None
+                          else "tarihsel skor örneklemi yeterli değil")
         tav_html += f"""
 <div class="pred-card skor" style="margin-top:6px">
   <div class="pred-icon">💣</div>
   <div class="pred-body">
-    <div class="pt">SÜRPRİZ SKOR (veri destekli)</div>
-    <div class="pp">{surprise['score']} — %{surprise['pct']:.0f}</div>
-    <div class="pw">Ana tahminden farklı sonuç kategorisi ama blended dağılımda %{surprise['pct']:.0f} pay var
-    (Poisson %{surprise['poisson_pct']:.0f}, pattern %{surprise['pattern_pct']:.0f})</div>
+    <div class="pt">SÜRPRİZ SKOR (model olasılığı)</div>
+    <div class="pp">{surprise['score']} — %{surprise['pct']:.2f}</div>
+    <div class="pw">Model olasılığı %{surprise['poisson_pct']:.2f}; {_surprise_hist}. Tarihsel sıklık model olasılığına eklenmemiştir.</div>
   </div>
 </div>"""
     else:
         tav_html += """
 <div style="font-size:.62rem;color:#4a6880;padding:6px 2px">
   💣 Sürpriz skor için yeterli veri desteği yok — zorla gösterilmiyor.
+</div>"""
+
+    # ── İSTENEN 3 KATEGORİ: BANKO / NORMAL / SÜRPRİZ ──
+    banko_body = (
+        f"<b>{banko_pick['market']}</b> — %{banko_pick['pct']:.2f}" +
+        (f" · Gerçek oran: {banko_pick['odds']:.2f}" if banko_pick.get("odds") is not None else " · Oran verisi yok") +
+        (f" · Model-piyasa farkı: {banko_pick['value_edge_pct']:+.2f} yüzde puan" if banko_pick.get("value_edge_pct") is not None else "") +
+        "<br><span style='color:#4a6880'>Model eşiği ve form örneklemi yeterli. Yine de garanti anlamına gelmez.</span>"
+        if banko_pick else
+        "<b>Banko yok — yeterli güven bulunamadı.</b><br><span style='color:#4a6880'>Olasılık, örneklem veya model kapsamı eşiği karşılanmadı.</span>"
+    )
+    normal_body = "<br>".join(f"<b>{label}</b> — %{pct:.2f}" for label, pct in normal_rows) or "Model verisi yetersiz; normal skor senaryosu üretilmedi."
+    if surprise_scenarios:
+        surprise_body = "<br>".join(
+            f"<b>{c['label']}</b> — %{c['pct']:.2f} <span style='color:#4a6880'>· oran verisi yok · {c['reason']}</span>"
+            for c in surprise_scenarios[:3]
+        )
+    else:
+        surprise_body = "Yeterli olasılık eşiğini geçen sürpriz senaryo bulunamadı; skorlar zorlanmadı."
+    tav_html += f"""
+<div class="tahmin-panel" style="margin-top:8px">
+  <div class="dp-section-title">AYRI TAHMİN KATEGORİLERİ — Olasılık tabanlı</div>
+  <div class="pred-card banko"><div class="pred-icon">🟢</div><div class="pred-body"><div class="pt">BANKO</div><div class="pp">{banko_body}</div></div></div>
+  <div class="pred-card orta"><div class="pred-icon">🟡</div><div class="pred-body"><div class="pt">NORMAL</div><div class="pp">{normal_body}</div><div class="pw">Modelin en olası ilk yarı, maç sonu ve İY/MS senaryoları.</div></div></div>
+  <div class="pred-card risky"><div class="pred-icon">💣</div><div class="pred-body"><div class="pt">SÜRPRİZ — EN FAZLA 3 SENARYO</div><div class="pp">{surprise_body}</div><div class="pw">Bu olasılıklar model tahminidir; oran verisi yoksa değer avantajı iddia edilmez.</div></div></div>
 </div>"""
 
     # ── NİHAİ TAHMİN ÖZETİ (tamamen hesaplanan verilerden) ──
@@ -5416,17 +5660,45 @@ if fetch_btn:
         a_s=find_standing(standings,aid)
         h_sc=find_scorer(scorers,hid)
         a_sc=find_scorer(scorers,aid)
-        hxg=calc_xg(hf,af,True)
-        axg=calc_xg(af,hf,False)
-        h_htxg=calc_ht_xg(hf,hxg)
-        a_htxg=calc_ht_xg(af,axg)
-        ms_mat=score_mat(hxg,axg)
-        ht_mat=score_mat(h_htxg,a_htxg,mx=4)
-        stats=compute_stats(ms_mat,ht_mat)
-        top_ms=sorted(ms_mat.items(),key=lambda x:-x[1])[:12]
-        top_ht=sorted(ht_mat.items(),key=lambda x:-x[1])[:6]
         oa = None
         matched_odds = None
+        score_model = None
+        if _form_missing:
+            # No generic xG defaults: do not produce a synthetic score model.
+            hxg = axg = h_htxg = a_htxg = None
+            ms_mat = ht_mat = {}
+            stats = {"model_available": False, "coverage_pct": 0.0}
+            top_ms = top_ht = []
+        else:
+            hxg = calc_xg(hf, af, True)
+            axg = calc_xg(af, hf, False)
+            h_htxg = calc_ht_xg(hf, af, hxg)
+            a_htxg = calc_ht_xg(af, hf, axg)
+            if None in (hxg, axg, h_htxg, a_htxg):
+                _form_missing = True
+                hxg = axg = h_htxg = a_htxg = None
+                ms_mat = ht_mat = {}
+                stats = {"model_available": False, "coverage_pct": 0.0}
+                top_ms = top_ht = []
+            else:
+                # First-half xG is capped consistently inside the final-match goal budget.
+                h_htxg = round(min(float(h_htxg), float(hxg) * 0.65), 3)
+                a_htxg = round(min(float(a_htxg), float(axg) * 0.65), 3)
+                score_model = compute_joint_score_model(hxg, axg, h_htxg, a_htxg)
+                if score_model:
+                    h_htxg = score_model["ht_xg_home"]
+                    a_htxg = score_model["ht_xg_away"]
+                    ms_mat = score_model["ms_mat"]
+                    ht_mat = score_model["ht_mat"]
+                    stats = compute_stats(ms_mat, ht_mat, joint_model=score_model)
+                    top_ms = sorted(ms_mat.items(), key=lambda x: -x[1])
+                    top_ht = sorted(ht_mat.items(), key=lambda x: -x[1])
+                else:
+                    _form_missing = True
+                    hxg = axg = h_htxg = a_htxg = None
+                    ms_mat = ht_mat = {}
+                    stats = {"model_available": False, "coverage_pct": 0.0}
+                    top_ms = top_ht = []
         if auto_odds:
             _match_date = m.get("utcDate","")[:10]
             matched_odds = get_match_odds(
@@ -5435,7 +5707,7 @@ if fetch_btn:
                 af_key=apifootball_key
             )
 
-        if matched_odds:
+        if matched_odds and not _form_missing:
             oa = analyze_odds(
                 matched_odds["o1"], matched_odds["ox"], matched_odds["o2"],
                 stats, hn, an
@@ -5444,10 +5716,10 @@ if fetch_btn:
                 oa["o25_ov"] = matched_odds["o25_ov"]
                 oa["o25_un"] = matched_odds.get("o25_un")
             oa["_source"] = matched_odds.get("source","?")
-        elif use_manual_odds and manual_o1:
+        elif use_manual_odds and manual_o1 and not _form_missing:
             oa = analyze_odds(manual_o1, manual_ox, manual_o2, stats, hn, an)
             oa["_source"] = "manuel"
-        else:
+        elif not _form_missing:
             est = estimate_odds_with_groq(hn, an, stats, hf, af, h2h, h_s, a_s)
             if est:
                 oa = analyze_odds(est["o1"], est["ox"], est["o2"], stats, hn, an)
@@ -5455,7 +5727,7 @@ if fetch_btn:
 
         pattern_data = None
         _couk = FD_ORG_TO_COUK.get(sel_code)
-        if _couk and oa:
+        if _couk and oa and not _form_missing and odds_provenance(oa.get("_source", "")).get("is_real", False):
             o1_v = oa["o1"]
             ox_v = oa["ox"]
             o2_v = oa["o2"]
@@ -5464,9 +5736,10 @@ if fetch_btn:
                 n_seasons=n_seasons, tol=tolerance
             )
 
-        prompt = build_prompt(hn,an,hf,af,h2h,hxg,axg,h_htxg,a_htxg,
-                              stats,h_s,a_s,h_sc,a_sc,top_ms,top_ht,
-                              odds_analysis=oa)
+        prompt = (build_prompt(hn,an,hf,af,h2h,hxg,axg,h_htxg,a_htxg,
+                               stats,h_s,a_s,h_sc,a_sc,top_ms,top_ht,
+                               odds_analysis=oa)
+                  if not _form_missing else "")
 
         _m_league_name = m.get("_af_league_name") or sel_label
         _m_country     = m.get("_af_country") or (sel_league_obj["country"] if sel_league_obj else "")
@@ -5479,8 +5752,10 @@ if fetch_btn:
             "match":m,"prompt":prompt,"hf":hf,"af":af,"h2h":h2h,
             "hxg":hxg,"axg":axg,"h_htxg":h_htxg,"a_htxg":a_htxg,
             "stats":stats,"top_ms":top_ms,"top_ht":top_ht,
+            "score_model":score_model,
             "h_stand":h_s,"a_stand":a_s,"h_sc":h_sc,"a_sc":a_sc,
             "odds_analysis":oa,
+            "raw_odds":matched_odds,
             "pattern_data":pattern_data,
             "league_name": _m_league_name,
             "league_country": _m_country,
@@ -5506,6 +5781,9 @@ if all_btn:
             hn=d["match"]["homeTeam"]["name"]
             an=d["match"]["awayTeam"]["name"]
             bar2.progress(i/len(items),text=f"({i+1}/{len(items)}) {hn}–{an}")
+            if d.get("form_missing") or not d.get("prompt"):
+                st.info(f"{hn}–{an}: veri yetersiz, model tahmini atlandı.")
+                continue
             result = groq_call(d["prompt"])
             st.session_state.analyses[mid] = result
             if i < len(items) - 1:
@@ -5529,14 +5807,28 @@ def _ht_score_pct(top_ht, hg, ag):
     return 0.0
 
 
+def classify_scan_bucket(model_available, has_banko, surprise_score, threshold=5.0):
+    """Classify scan rows without marking every match as a surprise just
+    because the model can calculate at least one long-shot scenario."""
+    if not model_available:
+        return "⚪ VERİ YETERSİZ"
+    if has_banko:
+        return "🟢 BANKO"
+    try:
+        peak = float(surprise_score or 0.0)
+    except (TypeError, ValueError):
+        peak = 0.0
+    return "💣 SÜRPRİZ" if peak >= float(threshold) else "🟡 NORMAL"
+
+
 if st.session_state.matches and st.session_state.mdata:
     st.markdown("### 🎯 Maç Tarama — İY Skor & Dönüş Olasılıkları")
     st.caption("Groq analizi beklemez, 'Maçları Çek' sonrası anında hesaplanır. "
                "İY 2-1 / 1-2 / 2-2 gibi yüksek-varyans skorlar ve İY/MS dönüş "
-               "(2/1, 1/2) olasılığı yüksek maçlar 🎲 ile işaretlenir; kural bazlı "
-               "yüksek güven kriterlerini karşılayanlar 🟢 BANKO, geri kalanı "
-               "🟡 NORMAL olarak etiketlenir (bkz. classify_confidence — LLM "
-               "metnine değil hesaplanan sayılara dayanır).")
+               "(2/1, 1/2) ile MS 3-3 olasılıkları ayrıca gösterilir; model/veri "
+               "eşiklerini sağlayanlar 🟢 BANKO, diğerleri 🟡 NORMAL veya 💣 SÜRPRİZ "
+               "olarak sınıflandırılır (LLM metnine değil hesaplanan sayılara dayanır). "
+               "Eksik gerçek form verisi olan maçlar tahmin üretmez.")
 
     _screen_rows = []
     for _mid, _d in st.session_state.mdata.items():
@@ -5547,6 +5839,7 @@ if st.session_state.matches and st.session_state.mdata:
         _ht21 = _ht_score_pct(_top_ht, 2, 1)
         _ht12 = _ht_score_pct(_top_ht, 1, 2)
         _ht22 = _ht_score_pct(_top_ht, 2, 2)
+        _ms33 = score_probability(_d.get("top_ms", []), 3, 3)
         _rev21 = _stats.get("rev21", 0)
         _rev12 = _stats.get("rev12", 0)
         try:
@@ -5556,17 +5849,17 @@ if st.session_state.matches and st.session_state.mdata:
             )
         except Exception:
             _ranked = []
-        _top_pick = _ranked[0] if _ranked else None
-        _variance_score = max(_ht21, _ht12, _ht22, _rev21, _rev12)
-        if _top_pick and _top_pick["label"] == "GÜÇLÜ":
-            _etiket = "🟢 BANKO"
-        elif _variance_score >= 8:
-            _etiket = "🎲 YÜKSEK VARYANS / DÖNÜŞ"
-        else:
-            _etiket = "🟡 NORMAL"
+        _top_pick = next((p for p in _ranked if p.get("label") == "GÜÇLÜ"), None)
+        _variance_score = max(_ht21, _ht12, _ht22, _rev21, _rev12, _ms33)
+        _surprise_candidates = build_surprise_scenarios(_d.get("top_ms", []), _top_ht, _stats)
+        _etiket = classify_scan_bucket(
+            bool(not _d.get("form_missing") and _stats.get("model_available", False)),
+            bool(_top_pick), _variance_score, threshold=5.0
+        )
         _screen_rows.append({
             "Maç": f"{_hn} — {_an}",
             "İY 2-1 %": _ht21, "İY 1-2 %": _ht12, "İY 2-2 %": _ht22,
+            "MS 3-3 %": round(_ms33, 3),
             "Dönüş 2/1 %": _rev21, "Dönüş 1/2 %": _rev12,
             "En Güçlü Bahis": (f"{_top_pick['market']} (%{_top_pick['pct']:.0f})"
                                if _top_pick else "-"),
@@ -5578,22 +5871,24 @@ if st.session_state.matches and st.session_state.mdata:
     with _c1:
         _filter_pick = st.radio(
             "Filtre",
-            ["Tümü", "🎲 Yüksek Varyans (İY 2-1/1-2/2-2 + Dönüş)", "🟢 Banko", "🟡 Normal"],
+            ["Tümü", "🟢 Banko", "🟡 Normal", "💣 Sürpriz", "⚪ Veri yetersiz"],
             horizontal=True, key="screen_filter"
         )
     with _c2:
         _sort_key = st.selectbox(
             "Sırala",
-            ["İY 2-1 %", "İY 1-2 %", "İY 2-2 %", "Dönüş 2/1 %", "Dönüş 1/2 %"],
+            ["İY 2-1 %", "İY 1-2 %", "İY 2-2 %", "MS 3-3 %", "Dönüş 2/1 %", "Dönüş 1/2 %"],
             key="screen_sort"
         )
 
-    if _filter_pick.startswith("🎲"):
-        _filtered = [r for r in _screen_rows if r["Etiket"].startswith("🎲")]
-    elif _filter_pick.startswith("🟢"):
+    if _filter_pick.startswith("🟢"):
         _filtered = [r for r in _screen_rows if r["Etiket"].startswith("🟢")]
     elif _filter_pick.startswith("🟡"):
         _filtered = [r for r in _screen_rows if r["Etiket"].startswith("🟡")]
+    elif _filter_pick.startswith("💣"):
+        _filtered = [r for r in _screen_rows if r["Etiket"].startswith("💣")]
+    elif _filter_pick.startswith("⚪"):
+        _filtered = [r for r in _screen_rows if r["Etiket"].startswith("⚪")]
     else:
         _filtered = list(_screen_rows)
 
@@ -5635,11 +5930,10 @@ if st.session_state.matches:
         with st.expander(f"{'✅' if done else '🔴'}  {hn}  vs  {an}  ·  {utc[11:16]}"):
             if d:
                 if d.get("form_missing"):
-                    st.error("🚫 **Form verisi çekilemedi** (API limiti / rate limit / veri yok) — "
-                             "xG ve tüm tahminler bu takım(lar) için VARSAYILAN değerlere dayanıyor, "
-                             "GÜVENİLİR DEĞİL. Farklı maçlarda aynı jenerik skoru (1-0, 1-1 vb.) "
-                             "görüyorsan sebebi budur. API-Football günlük kotan dolmuş olabilir — "
-                             "yarın tekrar dene veya 'Maks Maç' sayısını düşür.")
+                    st.error("🚫 Form verisi eksik olduğu için skor olasılığı ve bahis sınıflandırması hesaplanmadı. Sabit xG / varsayılan skor kullanılmadı. API kotasını, takım formu kaynağını veya tarih seçimini kontrol et.")
+                    if d.get("raw_odds"):
+                        _ro = d["raw_odds"]
+                        st.caption(f"Modelden bağımsız ham oran verisi: 1={_ro.get('o1', '—')} · X={_ro.get('ox', '—')} · 2={_ro.get('o2', '—')} · Kaynak={_ro.get('source', 'belirtilmemiş')}")
                 if d.get("league_name"):
                     _dq = d.get("data_quality")
                     _dq_txt = f" &nbsp;·&nbsp; 📊 Veri Kalitesi %{_dq:.0f}" if _dq is not None else ""
@@ -5665,7 +5959,7 @@ if st.session_state.matches:
                     odds_txt = ' &nbsp;·&nbsp; <span style="color:#4a6880">Oran çekilemedi</span>'
                 st.markdown(
                     f'<div style="font-size:.75rem;color:#4a6880;padding:6px 0;border-bottom:1px solid #1c2e44;margin-bottom:8px">'
-                    f'xG: <b style="color:#4c9eff">{hxg}</b>–<b style="color:#ff7070">{axg}</b>'
+                    f'xG: <b style="color:#4c9eff">{hxg if hxg is not None else "Veri yok"}</b>–<b style="color:#ff7070">{axg if axg is not None else "Veri yok"}</b>'
                     f' &nbsp;·&nbsp; {hn}: <b style="color:#a8c4d8">{hf.get("form_str","?") if hf else "?"}</b>'
                     f' &nbsp;·&nbsp; {an}: <b style="color:#a8c4d8">{af.get("form_str","?") if af else "?"}</b>'
                     f' &nbsp;·&nbsp; H2H: {h2.get("hw",0)}G-{h2.get("dr",0)}B-{h2.get("aw",0)}M'
@@ -5680,7 +5974,9 @@ if st.session_state.matches:
                 elif not oa:
                     st.info("💡 Oran verisi bulunamadı. Lig fixtures.csv'de bu maç yoksa sonraki hafta güncellenir.")
 
-                if not done:
+                if d.get("form_missing") or not d.get("stats", {}).get("model_available", False):
+                    st.info("Bu maç için BANKO / NORMAL / SÜRPRİZ ve skor tablosu kapalı: gerçek form verisi gelmeden tahmin üretilmez.")
+                elif not done:
                     if st.button("🤖 Analiz Et", key=f"btn_{mid}", type="primary"):
                         with st.spinner(f"🦙 Groq: {hn}–{an}..."):
                             st.session_state.analyses[mid] = groq_call(d["prompt"])
@@ -5718,7 +6014,7 @@ else:
     5. Profesyonel VS karşılaştırma arayüzü açılır
   </div>
   <div style="font-size:.68rem;color:#1a3050;margin-top:14px">
-    ✅ API key'ler hazır · football-data.org + Groq Llama 3.3 70B
+    ✅ API anahtarları Streamlit Secrets / ortam değişkenlerinden okunur
   </div>
 </div>
 """, unsafe_allow_html=True)
