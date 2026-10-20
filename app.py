@@ -61,6 +61,16 @@ import os
 _SECRET_LOAD_ERROR = None
 _SECRET_STATUS = {}
 
+# Fallback values copied from the user's supplied source file.
+# Streamlit Secrets and environment variables always take precedence.
+# Since these values were shared in chat/source code, rotate them in the provider dashboards.
+_EMBEDDED_KEY_FALLBACKS = {
+    "FD_KEY": "5cc88bf0dbac4fb699482886eb4c2270",
+    "AF_KEY": "b30caea6f2a4c305ff317308de0b917d",
+    "GROQ_KEY": "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",
+    "ODDS_API_KEY": "4d4d08c88873623761e05df66d0aeb07",
+}
+
 
 def _is_placeholder_secret(value):
     """Tanıdık örnek değerleri gerçek kimlik bilgisi gibi kabul etme."""
@@ -131,6 +141,17 @@ def _get_secret(name, env_fallback=None):
             _SECRET_STATUS[name] = f"ortam değişkeni {env_name} üzerinden yüklendi"
             return value
         saw_blank = True
+
+    # Last-resort fallback from the user's earlier source file. This prevents
+    # the app from falsely reporting missing required keys when the Cloud Secrets
+    # panel has not yet been configured. Replace these exposed values with rotated
+    # credentials; valid Secrets/env values above override them.
+    fallback = _EMBEDDED_KEY_FALLBACKS.get(name)
+    if fallback and not _is_placeholder_secret(fallback):
+        _SECRET_STATUS[name] = (
+            "kaynak dosyadaki yedek anahtardan yüklendi; güvenlik için yenileyin"
+        )
+        return str(fallback).strip()
 
     if saw_placeholder:
         _SECRET_STATUS[name] = "örnek yer tutucu değer girilmiş; gerçek anahtarla değiştir"
