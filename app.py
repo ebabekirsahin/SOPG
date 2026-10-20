@@ -59,10 +59,11 @@ st.set_page_config(page_title="⚽ BetAnalyst Pro", page_icon="⚽",
 import os
 
 _SECRET_LOAD_ERROR = None
+_SECRET_STATUS = {}
 
 
 def _is_placeholder_secret(value):
-    """Reject instructional placeholder strings instead of treating them as valid keys."""
+    """Tanıdık örnek değerleri gerçek kimlik bilgisi gibi kabul etme."""
     if value is None:
         return True
     text = str(value).strip()
@@ -72,43 +73,78 @@ def _is_placeholder_secret(value):
     placeholder_markers = (
         "YOUR_ROTATED_", "YOUR_", "GERCEK_", "GERÇEK_", "REPLACE_ME",
         "PASTE_YOUR_", "INSERT_YOUR_", "CHANGE_ME", "<API_KEY>",
+        "YOUR-", "CHANGEME",
     )
     return any(marker in upper for marker in placeholder_markers)
 
 
 def _get_secret(name, env_fallback=None):
-    """
-    Önce Streamlit Cloud Secrets, sonra ortam değişkenleri okunur.
-    Geçersiz TOML/Secrets yapılandırması sessizce yutulmaz; hata türü
-    kullanıcıya anahtar değeri veya hassas içerik gösterilmeden bildirilir.
-    Kod içinde gerçek API anahtarı tutulmaz.
+    """Önce Streamlit Secrets, sonra ortam değişkenlerini okur.
+
+    Değerlerin kendisi loglanmaz veya ekrana yazılmaz. Durum bilgisi yalnızca
+    anahtarın nereden yüklendiğini ya da neden kabul edilmediğini belirtir.
     """
     global _SECRET_LOAD_ERROR
+    saw_placeholder = False
+    saw_blank = False
+    secrets_readable = True
+
     try:
         secrets_obj = st.secrets
+        # Streamlit secrets isimleri case-sensitive'dir; beklenen adlar
+        # (FD_KEY, GROQ_KEY vb.) aynen kullanılmalıdır.
         if name in secrets_obj:
             candidate = secrets_obj[name]
-            if not _is_placeholder_secret(candidate):
-                return str(candidate).strip()
+            if _is_placeholder_secret(candidate):
+                saw_placeholder = True
+            else:
+                value = str(candidate).strip()
+                if value:
+                    _SECRET_STATUS[name] = "Streamlit Secrets içinden yüklendi"
+                    return value
+                saw_blank = True
     except Exception as exc:
-        # Exception metni sır/konfigürasyon içeriği gösterebileceğinden saklanmaz.
+        secrets_readable = False
         if _SECRET_LOAD_ERROR is None:
+            # Sadece istisna sınıfı tutulur; mesajında hassas içerik olabilir.
             _SECRET_LOAD_ERROR = type(exc).__name__
 
     # Hem dokümante edilen env değişkeni adı hem de Secrets anahtar adı desteklenir.
     env_names = []
     if env_fallback:
         env_names.append(env_fallback)
-    env_names.append(name)
+    if name not in env_names:
+        env_names.append(name)
+
     for env_name in env_names:
         candidate = os.environ.get(env_name)
-        if not _is_placeholder_secret(candidate):
-            return str(candidate).strip()
+        if candidate is None:
+            continue
+        if _is_placeholder_secret(candidate):
+            if str(candidate).strip():
+                saw_placeholder = True
+            else:
+                saw_blank = True
+            continue
+        value = str(candidate).strip()
+        if value:
+            _SECRET_STATUS[name] = f"ortam değişkeni {env_name} üzerinden yüklendi"
+            return value
+        saw_blank = True
+
+    if saw_placeholder:
+        _SECRET_STATUS[name] = "örnek yer tutucu değer girilmiş; gerçek anahtarla değiştir"
+    elif not secrets_readable and not any(os.environ.get(k) for k in env_names):
+        _SECRET_STATUS[name] = "Secrets okunamadı; TOML sözdizimini kontrol et"
+    elif saw_blank:
+        _SECRET_STATUS[name] = "değer boş; gerçek anahtar girilmemiş"
+    else:
+        _SECRET_STATUS[name] = "Secrets veya ortam değişkenlerinde bulunamadı"
     return ""
 
 
 # API anahtarları yalnızca Streamlit Secrets veya ortam değişkenlerinden okunur.
-# Daha önce sohbette/kaynak kodunda açığa çıkan anahtarları yenileyin.
+# Daha önce sohbet/kaynak kodunda paylaşılmış anahtarları servis panellerinden yenileyin.
 FD_KEY               = _get_secret("FD_KEY", "FOOTBALL_DATA_KEY")
 AF_KEY_DEFAULT       = _get_secret("AF_KEY", "API_FOOTBALL_KEY")
 GROQ_KEY             = _get_secret("GROQ_KEY", "GROQ_API_KEY")
@@ -1227,10 +1263,14 @@ with st.sidebar:
     st.markdown("## ⚙️ Filtreler")
     if _REQUIRED_MISSING:
         st.error(f"Eksik zorunlu API anahtarı: {', '.join(_REQUIRED_MISSING)}")
+        st.markdown("**Anahtar yapılandırma kontrolü (anahtar değerleri gösterilmez):**")
+        for missing_name in _REQUIRED_MISSING:
+            st.markdown(f"- `{missing_name}`: {_SECRET_STATUS.get(missing_name, 'yüklenemedi')}")
         if _SECRET_LOAD_ERROR:
             st.warning(
                 "Streamlit Secrets okunamadı (" + _SECRET_LOAD_ERROR + "). "
-                "Secrets içeriğinin geçerli TOML biçiminde ve her anahtarın ayrı satırda olduğundan emin ol."
+                "Secrets alanında Markdown kod çitleri (```) kullanma; her KEY = \"değer\" satırını "
+                "ayrı satıra koy ve TOML biçimini kontrol et."
             )
         st.markdown(
             "**Streamlit Community Cloud düzeltmesi**\n\n"
@@ -1245,8 +1285,10 @@ with st.sidebar:
             "ODDS_API_KEY = \"YOUR_ROTATED_ODDS_API_KEY\"\n"
             "```\n\n"
             "`FD_KEY` ve `GROQ_KEY` zorunludur. `AF_KEY` ve `ODDS_API_KEY` isteğe bağlıdır. "
-            "Bu örnek yer tutucular gerçek anahtar değildir. Tek satırda birleştirme. "
-            "Anahtarları GitHub'a commit etme; **Save** sonrasında uygulamayı yeniden kontrol et."
+            "`YOUR_ROTATED_...` değerlerini olduğu gibi kaydetme; gerçek ve yenilenmiş anahtarlarla değiştir. "
+            "Bu örnek yer tutucular gerçek anahtar değildir. "
+            "Yalnızca TOML satırlarını yapıştır; Markdown kod çitlerini (```) ekleme. "
+            "Her anahtar ayrı satırda olmalı. Anahtarları GitHub'a commit etme; **Save** sonrasında uygulamayı yeniden kontrol et."
         )
         st.stop()
     else:
