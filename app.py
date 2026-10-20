@@ -71,12 +71,13 @@ def _get_secret(name, env_fallback=None):
         pass
     return os.environ.get(env_fallback or name)
 
-# Öncelik sırası: Streamlit Secrets → ortam değişkeni → aşağıdaki yerel fallback.
-# Güvenlik notu: Bu dosyayı public GitHub reposuna yüklemeyin; Secrets/ortam değişkeni kullanmak daha güvenlidir.
-FD_KEY               = _get_secret("FD_KEY", "FOOTBALL_DATA_KEY") or "5cc88bf0dbac4fb699482886eb4c2270"
-AF_KEY_DEFAULT       = _get_secret("AF_KEY", "API_FOOTBALL_KEY") or "b30caea6f2a4c305ff317308de0b917d"
-GROQ_KEY             = _get_secret("GROQ_KEY", "GROQ_API_KEY") or "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"
-ODDS_API_KEY_DEFAULT = _get_secret("ODDS_API_KEY", "THE_ODDS_API_KEY") or "4d4d08c88873623761e05df66d0aeb07"
+# API anahtarları yalnızca Streamlit Secrets veya ortam değişkenlerinden okunur.
+# Daha önce kaynak kodunda/sohbette görünen anahtarlar ifşa edilmiş kabul edilmelidir;
+# servis panellerinden yenileyin. Kod deposuna anahtar gömülmez.
+FD_KEY               = _get_secret("FD_KEY", "FOOTBALL_DATA_KEY") or ""
+AF_KEY_DEFAULT       = _get_secret("AF_KEY", "API_FOOTBALL_KEY") or ""
+GROQ_KEY             = _get_secret("GROQ_KEY", "GROQ_API_KEY") or ""
+ODDS_API_KEY_DEFAULT = _get_secret("ODDS_API_KEY", "THE_ODDS_API_KEY") or ""
 
 _REQUIRED_MISSING = [n for n, v in {"FD_KEY": FD_KEY, "GROQ_KEY": GROQ_KEY}.items() if not v]
 
@@ -1196,10 +1197,10 @@ with st.sidebar:
             f"1. share.streamlit.io → uygulaman → sağ alttaki **⋮ (Manage app)**\n"
             f"2. **Settings → Secrets**\n"
             f"3. Aşağıdaki formatta yapıştır, **Save**:\n\n"
-            f"```\nFD_KEY = \"football-data-org-keyin\"\n"
-            f"AF_KEY = \"api-football-keyin\"\n"
-            f"GROQ_KEY = \"groq-keyin\"\n"
-            f"ODDS_API_KEY = \"the-odds-api-keyin\"\n```\n\n"
+            f"```toml\nFD_KEY = \"YOUR_ROTATED_FOOTBALL_DATA_KEY\"\n"
+            f"AF_KEY = \"YOUR_ROTATED_API_FOOTBALL_KEY\"\n"
+            f"GROQ_KEY = \"YOUR_ROTATED_GROQ_KEY\"\n"
+            f"ODDS_API_KEY = \"YOUR_ROTATED_ODDS_API_KEY\"\n```\n\n"
             f"Kaydettikten sonra uygulama otomatik yeniden başlar. "
             f"Key'leri **GitHub reposuna asla commit etme** — sadece Cloud'un Secrets panelinden gir."
         )
@@ -1365,6 +1366,10 @@ border-radius:6px;padding:8px 10px;font-size:.73rem;color:#7a9ab8;line-height:1.
 
     auto_odds = st.checkbox("✅ Oranları otomatik çek", value=True,
         help="The Odds API → API-Football → fdco.uk CSV → model tahmini sırasıyla dener")
+    fetch_special_markets = st.checkbox(
+        "🎯 İY/MS + kesin skor oranlarını da çek (ek API kredisi)", value=False,
+        help="The Odds API destekliyorsa 1/2, 2/1, doğru skor ve ilk yarı doğru skor oranlarını getirir. Pazar/plan desteği yoksa boş bırakılır. Maç başına ek API kredisi tüketebilir."
+    )
     tolerance = st.slider("Oran Toleransı (±)", 0.10, 0.60, 0.30, 0.05,
                            help="Geçmiş pattern aramasında kabul edilen oran farkı")
     n_seasons = st.slider("Kaç Sezon Analiz Edilsin", 1, 5, 3)
@@ -2656,7 +2661,7 @@ def fetch_odds_api(api_key, sport_key):
             params={
                 "apiKey":    api_key,
                 "regions":   "eu",
-                "markets":   "h2h",
+                "markets":   "h2h,totals",
                 "oddsFormat":"decimal",
                 "bookmakers":"bet365,pinnacle,unibet,williamhill,betfair",
             },
@@ -2676,7 +2681,34 @@ def fetch_odds_api(api_key, sport_key):
         if debug: st.caption(f"🐛 OddsAPI error: {e}")
         return []
 
+def _odds_consensus_from_books(book_prob_rows):
+    """Average overround-removed market probabilities across independent books."""
+    if not book_prob_rows:
+        return None
+    keys = ("p1", "px", "p2")
+    out = {}
+    for key in keys:
+        vals = [float(row[key]) for row in book_prob_rows if key in row and row[key] is not None]
+        if not vals:
+            return None
+        out[key] = round(sum(vals) / len(vals), 2)
+    total = sum(out[k] for k in keys)
+    if total <= 0:
+        return None
+    for key in keys:
+        out[key] = round(out[key] * 100.0 / total, 2)
+    out["vig"] = round(sum(float(row.get("vig", 0) or 0) for row in book_prob_rows) / len(book_prob_rows), 2)
+    out["books"] = len(book_prob_rows)
+    return out
+
+
 def get_odds_api_odds(api_key, sel_code, hn, an, match_date):
+    """Return best available 1X2/totals prices plus a separate multi-book consensus.
+
+    Prices are best-of-listed-bookmakers; the consensus probability is calculated
+    separately from each bookmaker's own margin-removed 1X2 market. They must not
+    be confused: best price is for EV evaluation, consensus is the market baseline.
+    """
     sport_key = FD_TO_ODDSAPI_SPORT.get(sel_code)
     if not sport_key:
         return None
@@ -2687,7 +2719,6 @@ def get_odds_api_odds(api_key, sel_code, hn, an, match_date):
         st.session_state[cache_key] = data
     else:
         data = st.session_state[cache_key]
-
     if not data:
         return None
 
@@ -2696,54 +2727,199 @@ def get_odds_api_odds(api_key, sel_code, hn, an, match_date):
     if match_date:
         try:
             target_date = _dt.datetime.strptime(match_date, "%Y-%m-%d").date()
-        except:
+        except (TypeError, ValueError):
             pass
 
     for game in data:
-        gdate = game.get("commence_time","")[:10]
+        gdate = game.get("commence_time", "")[:10]
         if target_date:
             try:
                 gd = _dt.datetime.strptime(gdate, "%Y-%m-%d").date()
                 if abs((gd - target_date).days) > 1:
                     continue
-            except:
-                pass
-
-        g_home = game.get("home_team","")
-        g_away = game.get("away_team","")
+            except (TypeError, ValueError):
+                continue
+        g_home, g_away = game.get("home_team", ""), game.get("away_team", "")
         if not (fuzzy_match_team(g_home, hn) and fuzzy_match_team(g_away, an)):
             continue
 
-        bookmakers = game.get("bookmakers",[])
-        def find_bm(name_frag):
-            return next((b for b in bookmakers if name_frag.lower() in b.get("key","").lower()), None)
+        best = {"1": (None, None), "X": (None, None), "2": (None, None)}
+        best_totals = {"over": (None, None), "under": (None, None)}
+        consensus_rows = []
+        bookmakers = game.get("bookmakers", []) or []
+        for bm in bookmakers:
+            one_x_two = {}
+            totals = {"over": None, "under": None}
+            for market in bm.get("markets", []) or []:
+                key = market.get("key")
+                for outcome in market.get("outcomes", []) or []:
+                    price = _safe_float(outcome.get("price"))
+                    if price is None or price <= 1.0:
+                        continue
+                    name = str(outcome.get("name", "")).strip()
+                    if key in ("h2h", "h2h_3_way"):
+                        if name == g_home:
+                            one_x_two["1"] = price
+                        elif name == g_away:
+                            one_x_two["2"] = price
+                        else:
+                            one_x_two["X"] = price
+                    elif key == "totals":
+                        point = _safe_float(outcome.get("point"))
+                        if point is not None and abs(point - 2.5) < 1e-6:
+                            side = "over" if "over" in name.lower() else "under" if "under" in name.lower() else None
+                            if side:
+                                totals[side] = price
+            if all(one_x_two.get(k) and one_x_two[k] > 1 for k in ("1", "X", "2")):
+                inv = {k: 1.0 / one_x_two[k] for k in ("1", "X", "2")}
+                sm = sum(inv.values())
+                if sm > 0:
+                    consensus_rows.append({"p1": inv["1"] / sm * 100,
+                                           "px": inv["X"] / sm * 100,
+                                           "p2": inv["2"] / sm * 100,
+                                           "vig": (sum(inv.values()) - 1) * 100})
+                for key in ("1", "X", "2"):
+                    if best[key][0] is None or one_x_two[key] > best[key][0]:
+                        best[key] = (one_x_two[key], bm.get("title", bm.get("key", "?")))
+            for side in ("over", "under"):
+                if totals[side] and (best_totals[side][0] is None or totals[side] > best_totals[side][0]):
+                    best_totals[side] = (totals[side], bm.get("title", bm.get("key", "?")))
 
-        bm = find_bm("bet365") or find_bm("pinnacle") or find_bm("unibet") or (bookmakers[0] if bookmakers else None)
-        if not bm:
-            continue
-
-        bm_name = bm.get("title", bm.get("key","?"))
-        o1 = ox = o2 = None
-        for market in bm.get("markets",[]):
-            if market.get("key") != "h2h":
-                continue
-            for outcome in market.get("outcomes",[]):
-                name = outcome.get("name","")
-                price = _safe_float(outcome.get("price"))
-                if name == g_home:   o1 = price
-                elif name == g_away: o2 = price
-                else:                ox = price
-
-        if o1 and ox and o2 and o1 > 1.0 and ox > 1.0 and o2 > 1.0:
-            if debug: st.caption(f"🐛 OddsAPI [{bm_name}] {g_home} vs {g_away}: 1={o1} X={ox} 2={o2}")
+        if all(best[k][0] and best[k][0] > 1 for k in ("1", "X", "2")):
+            consensus = _odds_consensus_from_books(consensus_rows)
+            book_names = sorted({str(best[k][1]) for k in ("1", "X", "2") if best[k][1]})
+            source = f"The Odds API (best prices; {len(consensus_rows)}-book consensus)"
             return {
-                "o1": round(o1,2), "ox": round(ox,2), "o2": round(o2,2),
-                "o25_ov": None, "o25_un": None,
-                "source": f"The Odds API ({bm_name})"
+                "o1": round(best["1"][0], 3), "ox": round(best["X"][0], 3),
+                "o2": round(best["2"][0], 3),
+                "o25_ov": round(best_totals["over"][0], 3) if best_totals["over"][0] else None,
+                "o25_un": round(best_totals["under"][0], 3) if best_totals["under"][0] else None,
+                "source": source, "event_id": game.get("id"),
+                "consensus_probs": consensus,
+                "best_price_books": {k: best[k][1] for k in ("1", "X", "2")},
+                "totals_books": {k: best_totals[k][1] for k in ("over", "under")},
+                "bookmaker_count": len(consensus_rows),
             }
-
-    if debug: st.caption(f"🐛 OddsAPI: {hn} vs {an} bulunamadı ({sport_key})")
+    if debug:
+        st.caption(f"🐛 OddsAPI: {hn} vs {an} için 1X2 oranları bulunamadı ({sport_key})")
     return None
+
+
+def _market_outcome_key(market_key, label):
+    """Normalize The Odds API market outcome names to HT/FT or exact-score keys."""
+    import re as _re
+    s = str(label or "").strip()
+    if market_key == "halftime_fulltime":
+        parts = _re.split(r"\s*(?:/|>|→)\s*", s)
+        if len(parts) != 2:
+            parts = _re.split(r"\s+-\s+", s)
+        if len(parts) != 2:
+            return None
+        def result_token(value):
+            v = value.strip().lower()
+            if v in ("1", "home", "home win", "h") or "home" in v:
+                return "1"
+            if v in ("x", "draw", "tie", "d", "drawn") or "draw" in v or "tie" in v:
+                return "X"
+            if v in ("2", "away", "away win", "a") or "away" in v:
+                return "2"
+            return None
+        first, second = result_token(parts[0]), result_token(parts[1])
+        return f"{first}/{second}" if first and second else None
+    if market_key in ("correct_score", "correct_score_h1"):
+        m = _re.search(r"(?<!\d)(\d{1,2})\s*[-:–]\s*(\d{1,2})(?!\d)", s)
+        if m:
+            return f"{int(m.group(1))}-{int(m.group(2))}"
+        if "other" in s.lower():
+            return "__OTHER__"
+    return None
+
+
+def _summarize_special_market(book_rows, min_book_outcomes=1, require_other=False):
+    """Aggregate one market's bookmaker prices and margin-removed probabilities."""
+    if not book_rows:
+        return {"best_odds": {}, "best_book": {}, "consensus_pct": {},
+                "bookmaker_count": 0, "outcome_count": 0, "available": False}
+    best_odds, best_book, probability_rows = {}, {}, []
+    for book, prices in book_rows:
+        valid = {k: float(v) for k, v in prices.items()
+                 if v is not None and math.isfinite(float(v)) and float(v) > 1.0}
+        for key, price in valid.items():
+            if key not in best_odds or price > best_odds[key]:
+                best_odds[key] = round(price, 3)
+                best_book[key] = book
+        complete_enough = len(valid) >= min_book_outcomes and (not require_other or "__OTHER__" in valid)
+        if complete_enough:
+            inverses = {k: 1.0 / v for k, v in valid.items()}
+            denom = sum(inverses.values())
+            if denom > 0:
+                probability_rows.append({k: v / denom * 100.0 for k, v in inverses.items()})
+    counts = {}
+    for row in probability_rows:
+        for key, value in row.items():
+            counts.setdefault(key, []).append(value)
+    consensus_pct = {k: round(sum(v) / len(v), 3) for k, v in counts.items() if v}
+    return {"best_odds": best_odds, "best_book": best_book,
+            "consensus_pct": consensus_pct, "bookmaker_count": len(probability_rows),
+            "outcome_count": max((len(prices) for _, prices in book_rows), default=0),
+            "available": bool(best_odds)}
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def fetch_odds_api_special_markets(api_key, sport_key, event_id):
+    """Fetch supported HT/FT and correct-score odds for one event; never fabricate markets."""
+    if not api_key or not sport_key or not event_id:
+        return {"available": False, "reason": "Etkinlik kimliği veya API anahtarı yok.", "markets": {}}
+    params = {"apiKey": api_key, "regions": "eu",
+              "markets": "halftime_fulltime,correct_score,correct_score_h1",
+              "oddsFormat": "decimal",
+              "bookmakers": "bet365,pinnacle,unibet,williamhill,betfair"}
+    url = f"{ODDS_API_BASE}/sports/{sport_key}/events/{event_id}/odds/"
+    try:
+        response = requests.get(url, params=params, timeout=20)
+        if response.status_code != 200:
+            note = "Pazar bulunamadı veya API planı bu pazarı desteklemiyor."
+            if response.status_code in (401, 403, 422):
+                note = f"Pazar erişilemedi (HTTP {response.status_code}); anahtar, plan veya kapsam kontrol edilmeli."
+            return {"available": False, "reason": note, "http_status": response.status_code, "markets": {}}
+        payload = response.json()
+        if isinstance(payload, list):
+            payload = payload[0] if payload else {}
+        if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+            payload = payload["data"]
+        if not isinstance(payload, dict):
+            return {"available": False, "reason": "Beklenmeyen API yanıtı.", "markets": {}}
+        collected = {"halftime_fulltime": [], "correct_score_h1": [], "correct_score": []}
+        for bookmaker in payload.get("bookmakers", []) or []:
+            title = bookmaker.get("title", bookmaker.get("key", "Bilinmeyen bookmaker"))
+            for market in bookmaker.get("markets", []) or []:
+                mkey = market.get("key")
+                if mkey not in collected:
+                    continue
+                prices = {}
+                for outcome in market.get("outcomes", []) or []:
+                    price = _safe_float(outcome.get("price"))
+                    outcome_key = _market_outcome_key(mkey, outcome.get("name"))
+                    if outcome_key and price and price > 1.0:
+                        prices[outcome_key] = price
+                # Score markets commonly expose an 'Other' outcome; keep it in
+                # overround removal so individual correct-score probabilities aren't inflated.
+                if prices:
+                    # Keep real individual prices even when the book's market is
+                    # incomplete; completeness thresholds apply only to consensus.
+                    collected[mkey].append((title, prices))
+        markets = {
+            "halftime_fulltime": _summarize_special_market(collected["halftime_fulltime"], 9),
+            "correct_score_h1": _summarize_special_market(collected["correct_score_h1"], 15, require_other=True),
+            "correct_score": _summarize_special_market(collected["correct_score"], 20, require_other=True),
+        }
+        available = any(m.get("available") for m in markets.values())
+        return {"available": available, "reason": None if available else "Bu maçta ilgili pazarlar/bahis şirketleri tarafından oran yayımlanmamış.",
+                "event_id": event_id, "source": "The Odds API", "markets": markets}
+    except requests.RequestException:
+        return {"available": False, "reason": "Özel pazar API isteği başarısız; oran uydurulmadı.", "markets": {}}
+    except (ValueError, TypeError, KeyError):
+        return {"available": False, "reason": "Özel pazar yanıtı çözümlenemedi; oran uydurulmadı.", "markets": {}}
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_sofascore_odds(hn, an, match_date):
@@ -3322,11 +3498,15 @@ X: [oran]
         pass
     return None
 
-def analyze_odds(o1, ox, o2, model_stats, h_name, a_name):
+def analyze_odds(o1, ox, o2, model_stats, h_name, a_name, market_consensus=None):
     if not o1 or not ox or not o2:
         return None
 
-    imp = odds_implied_probs(o1, ox, o2)
+    # Best prices and consensus probabilities are different objects. When a
+    # multi-book consensus exists, use it as the market baseline for model edge.
+    imp = (dict(market_consensus) if isinstance(market_consensus, dict)
+           and all(market_consensus.get(k) is not None for k in ("p1", "px", "p2"))
+           else odds_implied_probs(o1, ox, o2))
     if not imp:
         return None
 
@@ -4359,15 +4539,6 @@ def build_confidence_ranked_picks(stats, oa, hf, af, h2h, h_name, a_name, patter
         pct = max(0.0, min(100.0, float(pct or 0.0)))
         conf = classify_confidence(pct, oa, hf, af, h2h, market_key=mkey,
                                    pattern_data=pattern_data, hist_key=hist_key)
-        # A market is a banko candidate only when its probability is high and
-        # both teams have enough real form data. A correct-score pick is never banko.
-        is_banko = pct >= 72.0 and form_ok and coverage_ok
-        if is_banko:
-            label_conf, emoji, cls = "GÜÇLÜ", "🟢", "banko"
-        elif pct >= 45:
-            label_conf, emoji, cls = "ORTA RİSK", "🟡", "orta"
-        else:
-            label_conf, emoji, cls = "YÜKSEK RİSK", "🔴", "risky"
         actual_odds = None
         if has_real_odds and odds_key and oa.get(odds_key) not in (None, "", 0):
             try:
@@ -4398,16 +4569,36 @@ def build_confidence_ranked_picks(stats, oa, hf, af, h2h, h_name, a_name, patter
                     market_implied_pct = None
         value_edge_pct = (round(pct - market_implied_pct, 2)
                           if market_implied_pct is not None else None)
+        expected_return_pct = (round((pct / 100.0 * actual_odds - 1.0) * 100.0, 2)
+                               if actual_odds is not None else None)
+        # The term BANKO is reserved for high-probability selections with real
+        # book prices, positive model-vs-market edge and adequate input coverage.
+        # This remains a model signal, not a promise of profit.
+        is_banko = (pct >= 72.0 and form_ok and coverage_ok and actual_odds is not None
+                    and market_implied_pct is not None and value_edge_pct is not None
+                    and value_edge_pct >= 3.0 and expected_return_pct is not None
+                    and expected_return_pct >= 3.0)
+        if is_banko:
+            label_conf, emoji, cls = "GÜÇLÜ", "🟢", "banko"
+        elif pct >= 45:
+            label_conf, emoji, cls = "ORTA RİSK", "🟡", "orta"
+        else:
+            label_conf, emoji, cls = "YÜKSEK RİSK", "🔴", "risky"
         reasons = list(conf.get("reasons", []))
         if not form_ok:
             reasons.append(f"Veri yetersiz: form örneklemi {n_h}/{n_a}; banko engellendi")
         if not coverage_ok:
             reasons.append(f"Skor kapsamı %{stats.get('coverage_pct', 0)}; banko engellendi")
+        if actual_odds is None or market_implied_pct is None:
+            reasons.append("Gerçek ilgili piyasa oranı veya piyasa olasılığı yok; banko/value doğrulanmadı")
+        elif value_edge_pct is None or value_edge_pct < 3.0 or expected_return_pct is None or expected_return_pct < 3.0:
+            reasons.append("Gerçek oran var ancak model avantajı eşiği karşılanmadı")
         ranked.append({
             "market": label, "label": label_conf, "emoji": emoji, "cls": cls,
             "pct": round(pct, 2), "score": conf.get("score", 0), "of": conf.get("of", 0),
             "reasons": reasons, "odds": actual_odds, "has_real_odds": has_real_odds,
             "market_implied_pct": market_implied_pct, "value_edge_pct": value_edge_pct,
+            "expected_return_pct": expected_return_pct,
         })
     ranked.sort(key=lambda x: (x["label"] != "GÜÇLÜ", -x["pct"], -x["score"]))
     return ranked
@@ -4536,6 +4727,62 @@ def build_surprise_scenarios(top_ms, top_ht, stats):
         if c["label"] not in unique or c["pct"] > unique[c["label"]]["pct"]:
             unique[c["label"]] = c
     return sorted(unique.values(), key=lambda c: -c["pct"])[:3]
+
+
+def render_special_market_panel(score_model, special_odds):
+    """Show model probabilities beside real HT/FT/exact-score prices when available."""
+    st.markdown("#### 🎯 Sürpriz senaryolar: model olasılığı × gerçek piyasa oranı")
+    if not score_model:
+        st.info("Skor modeli için yeterli veri yok; özel senaryo olasılıkları hesaplanmadı.")
+        return
+    if not special_odds or not special_odds.get("available"):
+        reason = (special_odds or {}).get("reason") if isinstance(special_odds, dict) else None
+        st.caption(reason or "İY/MS ve kesin skor oranları çekilmedi. Kenar çubuğundan özel pazar çekimini açın; API bu pazarı/maçı desteklemiyorsa oran gösterilmez.")
+    markets = (special_odds or {}).get("markets", {}) if isinstance(special_odds, dict) else {}
+    combo_probs = dict(score_model.get("combos", []) or [])
+    rows = []
+    target_rows = [
+        ("İY/MS 1/2", "halftime_fulltime", "1/2", "combo", None),
+        ("İY/MS 2/1", "halftime_fulltime", "2/1", "combo", None),
+        ("İY/MS 1/1", "halftime_fulltime", "1/1", "combo", None),
+        ("İY/MS X/2", "halftime_fulltime", "X/2", "combo", None),
+        ("İY 2-1", "correct_score_h1", "2-1", "ht", (2, 1)),
+        ("İY 1-2", "correct_score_h1", "1-2", "ht", (1, 2)),
+        ("İY 2-2", "correct_score_h1", "2-2", "ht", (2, 2)),
+        ("MS 3-3", "correct_score", "3-3", "ms", (3, 3)),
+    ]
+    for label, market_key, outcome_key, model_kind, score in target_rows:
+        if model_kind == "combo":
+            model_pct = float(combo_probs.get(outcome_key, 0.0))
+        else:
+            mat = score_model.get("ht_mat" if model_kind == "ht" else "ms_mat", {})
+            model_pct = float(mat.get(score, 0.0))
+        market = markets.get(market_key, {}) if isinstance(markets, dict) else {}
+        best_odds = market.get("best_odds", {}).get(outcome_key)
+        best_book = market.get("best_book", {}).get(outcome_key)
+        market_pct = market.get("consensus_pct", {}).get(outcome_key)
+        edge = (round(model_pct - float(market_pct), 2) if market_pct is not None else None)
+        ev = (round((model_pct / 100.0 * float(best_odds) - 1.0) * 100.0, 2)
+              if best_odds and float(best_odds) > 1.0 else None)
+        if best_odds is None:
+            signal = "Gerçek oran yok"
+        elif market_pct is None:
+            signal = "Piyasa olasılığı hesaplanamadı"
+        elif edge is not None and edge >= 3.0 and ev is not None and ev >= 3.0:
+            signal = "Model lehine izleme sinyali"
+        elif edge is not None and edge <= -3.0:
+            signal = "Piyasa modelden güçlü"
+        else:
+            signal = "Avantaj eşiği karşılanmadı"
+        rows.append({
+            "Senaryo": label, "Model olasılığı %": round(model_pct, 3),
+            "Piyasa olasılığı %": round(float(market_pct), 3) if market_pct is not None else None,
+            "En iyi oran": round(float(best_odds), 3) if best_odds else None,
+            "Oran kaynağı": best_book, "Fark (yüzde puan)": edge,
+            "Teorik EV %": ev, "Sinyal": signal,
+        })
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.caption("Model olasılığı ile piyasa olasılığı ayrı gösterilir. Teorik EV kalibre edilmemiş model varsayımına dayanır; gerçek kârlılık iddiası değildir. Fiyat bulunmayan pazarlarda oran üretilmez.")
 
 
 def render_vs_ui(match, hf, af, h2h, hxg, axg, h_htxg, a_htxg,
@@ -5597,6 +5844,337 @@ padding:.6rem 1rem;margin-bottom:.6rem;display:flex;align-items:center;gap:10px"
 
     st.stop()
 
+def walk_forward_backtest(raw_df, min_team_history=4, max_team_history=25, edge_threshold_pp=3.0):
+    """Chronological walk-forward evaluation for football-data.co.uk-style match CSVs.
+
+    Each fixture uses only data from strictly earlier dates. Besides FT 1X2 and exact-score
+    metrics, halftime columns enable HT/FT joint-probability and requested surprise-event
+    evaluation. This is an honest baseline audit, not a guarantee of betting profit.
+    """
+    if raw_df is None or getattr(raw_df, "empty", True):
+        return {"error": "CSV boş."}
+    df = raw_df.copy()
+    df.columns = [str(c).strip().replace("\ufeff", "") for c in df.columns]
+    lookup = {c.lower().replace(" ", "").replace("_", ""): c for c in df.columns}
+
+    def col(*names):
+        for name in names:
+            key = name.lower().replace(" ", "").replace("_", "")
+            if key in lookup:
+                return lookup[key]
+        return None
+
+    c_date = col("Date", "MatchDate")
+    c_home = col("HomeTeam", "Home Team", "home")
+    c_away = col("AwayTeam", "Away Team", "away")
+    c_hg = col("FTHG", "FullTimeHomeGoals", "HomeGoals")
+    c_ag = col("FTAG", "FullTimeAwayGoals", "AwayGoals")
+    c_hthg = col("HTHG", "HalfTimeHomeGoals", "HomeHalfTimeGoals")
+    c_htag = col("HTAG", "HalfTimeAwayGoals", "AwayHalfTimeGoals")
+    c_odds = {"1": col("B365H", "PSH", "AvgH", "HomeOdds"),
+              "X": col("B365D", "PSD", "AvgD", "DrawOdds"),
+              "2": col("B365A", "PSA", "AvgA", "AwayOdds")}
+    if not all((c_date, c_home, c_away, c_hg, c_ag)):
+        return {"error": "CSV için Date, HomeTeam, AwayTeam, FTHG ve FTAG sütunları gerekiyor. ROI testi için B365H/B365D/B365A veya eşdeğer oran sütunları kullanılır."}
+
+    df["__date"] = pd.to_datetime(df[c_date], dayfirst=True, errors="coerce", utc=True)
+    df["__hg"] = pd.to_numeric(df[c_hg], errors="coerce")
+    df["__ag"] = pd.to_numeric(df[c_ag], errors="coerce")
+    df["__home"] = df[c_home].astype(str).str.strip()
+    df["__away"] = df[c_away].astype(str).str.strip()
+    if c_hthg:
+        df["__hthg"] = pd.to_numeric(df[c_hthg], errors="coerce")
+    else:
+        df["__hthg"] = float("nan")
+    if c_htag:
+        df["__htag"] = pd.to_numeric(df[c_htag], errors="coerce")
+    else:
+        df["__htag"] = float("nan")
+    has_ht_cols = bool(c_hthg and c_htag)
+    df = df.dropna(subset=["__date", "__hg", "__ag"])
+    df = df[(df["__home"] != "") & (df["__away"] != "") &
+            (df["__home"] != "nan") & (df["__away"] != "nan")]
+    df = df.sort_values("__date", kind="stable").reset_index(drop=True)
+    if len(df) < 30:
+        return {"error": f"Walk-forward test için çok az maç var ({len(df)}). En az 30, tercihen birkaç sezon veri yükleyin."}
+
+    def _smoothed_mean(rows, column, prior, prior_n=5.0):
+        vals = pd.to_numeric(rows[column], errors="coerce").dropna().tail(max_team_history)
+        denom = len(vals) + prior_n
+        return (float(vals.sum()) + float(prior) * prior_n) / denom if denom else float(prior)
+
+    predictions, brier_vals, logloss_vals, exact_hits, scores = [], [], [], [], []
+    combo_brier_vals, combo_logloss_vals = [], []
+    special_events = {
+        "İY/MS 1/2": {"pred": [], "actual": []},
+        "İY/MS 2/1": {"pred": [], "actual": []},
+        "İY 2-1": {"pred": [], "actual": []},
+        "İY 1-2": {"pred": [], "actual": []},
+        "İY 2-2": {"pred": [], "actual": []},
+        "MS 3-3": {"pred": [], "actual": []},
+    }
+    roi_stakes, roi_returns, wins = 0, 0.0, 0
+    htft_rows = 0
+    for _, row in df.iterrows():
+        # Same-date fixtures are excluded too, so no result from the test date can leak.
+        hist = df[df["__date"] < row["__date"]]
+        if hist.empty:
+            continue
+        home, away = row["__home"], row["__away"]
+        league_home = float(hist["__hg"].mean())
+        league_away = float(hist["__ag"].mean())
+        if not math.isfinite(league_home) or not math.isfinite(league_away) or min(league_home, league_away) <= 0:
+            continue
+        hhome = hist[hist["__home"] == home].tail(max_team_history)
+        aaway = hist[hist["__away"] == away].tail(max_team_history)
+        if len(hhome) < min_team_history or len(aaway) < min_team_history:
+            continue
+
+        prior_n = 5.0
+        h_att = _smoothed_mean(hhome, "__hg", league_home, prior_n) / league_home
+        h_def = _smoothed_mean(hhome, "__ag", league_away, prior_n) / league_away
+        a_att = _smoothed_mean(aaway, "__ag", league_away, prior_n) / league_away
+        a_def = _smoothed_mean(aaway, "__hg", league_home, prior_n) / league_home
+        lam_h = max(0.05, min(4.5, league_home * h_att * a_def))
+        lam_a = max(0.05, min(4.5, league_away * a_att * h_def))
+
+        joint_model = None
+        actual_ht_available = (has_ht_cols and pd.notna(row.get("__hthg")) and pd.notna(row.get("__htag")))
+        if has_ht_cols:
+            hist_ht = hist.dropna(subset=["__hthg", "__htag"])
+            if len(hist_ht) >= 30:
+                league_ht_home = float(hist_ht["__hthg"].mean())
+                league_ht_away = float(hist_ht["__htag"].mean())
+                hhome_ht = hist_ht[hist_ht["__home"] == home].tail(max_team_history)
+                aaway_ht = hist_ht[hist_ht["__away"] == away].tail(max_team_history)
+                if (len(hhome_ht) >= min_team_history and len(aaway_ht) >= min_team_history
+                        and league_ht_home > 0 and league_ht_away > 0):
+                    h_ht_att = _smoothed_mean(hhome_ht, "__hthg", league_ht_home, prior_n) / league_ht_home
+                    h_ht_def = _smoothed_mean(hhome_ht, "__htag", league_ht_away, prior_n) / league_ht_away
+                    a_ht_att = _smoothed_mean(aaway_ht, "__htag", league_ht_away, prior_n) / league_ht_away
+                    a_ht_def = _smoothed_mean(aaway_ht, "__hthg", league_ht_home, prior_n) / league_ht_home
+                    lam_ht_h = max(0.01, min(lam_h * 0.65, league_ht_home * h_ht_att * a_ht_def))
+                    lam_ht_a = max(0.01, min(lam_a * 0.65, league_ht_away * a_ht_att * h_ht_def))
+                    joint_model = compute_joint_score_model(lam_h, lam_a, lam_ht_h, lam_ht_a)
+
+        if joint_model:
+            score_probs = joint_model["ms_mat"]
+        else:
+            score_probs = score_mat(lam_h, lam_a)
+        total_prob = sum(score_probs.values())
+        if total_prob <= 0:
+            continue
+        probs = {"1": sum(p for (gh, ga), p in score_probs.items() if gh > ga) / total_prob,
+                 "X": sum(p for (gh, ga), p in score_probs.items() if gh == ga) / total_prob,
+                 "2": sum(p for (gh, ga), p in score_probs.items() if gh < ga) / total_prob}
+        outcome = "1" if int(row["__hg"]) > int(row["__ag"]) else "X" if int(row["__hg"]) == int(row["__ag"]) else "2"
+        # `probs` are fractions (0..1), not percentage points.
+        brier_vals.append(sum((probs[k] - (1.0 if k == outcome else 0.0)) ** 2 for k in ("1", "X", "2")))
+        logloss_vals.append(-math.log(max(1e-12, probs[outcome])))
+        top_score = max(score_probs, key=lambda t: score_probs[t])
+        actual_score = (int(row["__hg"]), int(row["__ag"]))
+        exact_hits.append(1 if top_score == actual_score else 0)
+
+        row_result = {
+            "Date": row["__date"].strftime("%Y-%m-%d"), "Home": home, "Away": away,
+            "Actual": f"{actual_score[0]}-{actual_score[1]}",
+            "Top score": f"{top_score[0]}-{top_score[1]}",
+            "Model 1 %": round(probs["1"] * 100.0, 2), "Model X %": round(probs["X"] * 100.0, 2),
+            "Model 2 %": round(probs["2"] * 100.0, 2), "Outcome": outcome,
+        }
+        if joint_model and actual_ht_available:
+            ht_h, ht_a = int(row["__hthg"]), int(row["__htag"])
+            ht_result = "1" if ht_h > ht_a else "X" if ht_h == ht_a else "2"
+            actual_combo = f"{ht_result}/{outcome}"
+            combo_probs = dict(joint_model["combos"])
+            combo_brier_vals.append(sum((combo_probs.get(k, 0.0) / 100.0 - (1.0 if k == actual_combo else 0.0)) ** 2
+                                        for k in ("1/1", "1/X", "1/2", "X/1", "X/X", "X/2", "2/1", "2/X", "2/2")))
+            combo_logloss_vals.append(-math.log(max(1e-12, combo_probs.get(actual_combo, 0.0) / 100.0)))
+            htft_rows += 1
+            special_probs = {
+                "İY/MS 1/2": combo_probs.get("1/2", 0.0) / 100.0,
+                "İY/MS 2/1": combo_probs.get("2/1", 0.0) / 100.0,
+                "İY 2-1": joint_model["ht_mat"].get((2, 1), 0.0) / 100.0,
+                "İY 1-2": joint_model["ht_mat"].get((1, 2), 0.0) / 100.0,
+                "İY 2-2": joint_model["ht_mat"].get((2, 2), 0.0) / 100.0,
+                "MS 3-3": joint_model["ms_mat"].get((3, 3), 0.0) / 100.0,
+            }
+            actuals = {
+                "İY/MS 1/2": actual_combo == "1/2",
+                "İY/MS 2/1": actual_combo == "2/1",
+                "İY 2-1": (ht_h, ht_a) == (2, 1),
+                "İY 1-2": (ht_h, ht_a) == (1, 2),
+                "İY 2-2": (ht_h, ht_a) == (2, 2),
+                "MS 3-3": actual_score == (3, 3),
+            }
+            for event_name, event_p in special_probs.items():
+                special_events[event_name]["pred"].append(event_p)
+                special_events[event_name]["actual"].append(1 if actuals[event_name] else 0)
+            row_result.update({
+                "Actual HT": f"{ht_h}-{ht_a}",
+                "Model İY/MS 1/2 %": round(special_probs["İY/MS 1/2"] * 100.0, 3),
+                "Model İY/MS 2/1 %": round(special_probs["İY/MS 2/1"] * 100.0, 3),
+                "Model İY 2-1 %": round(special_probs["İY 2-1"] * 100.0, 3),
+                "Model İY 1-2 %": round(special_probs["İY 1-2"] * 100.0, 3),
+                "Model İY 2-2 %": round(special_probs["İY 2-2"] * 100.0, 3),
+                "Model MS 3-3 %": round(special_probs["MS 3-3"] * 100.0, 3),
+                "Actual İY/MS": actual_combo,
+            })
+        scores.append(row_result)
+
+        prices = {}
+        for result, column in c_odds.items():
+            if column:
+                val = pd.to_numeric(pd.Series([row.get(column)]), errors="coerce").iloc[0]
+                if pd.notna(val) and float(val) > 1.0:
+                    prices[result] = float(val)
+        if len(prices) == 3:
+            inv = {k: 1.0 / v for k, v in prices.items()}
+            denom = sum(inv.values())
+            market = {k: v / denom for k, v in inv.items()}
+            edge_candidates = [(probs[k] - market[k], k) for k in probs]
+            edge, selection = max(edge_candidates)
+            if edge * 100 >= edge_threshold_pp:
+                roi_stakes += 1
+                won = selection == outcome
+                wins += int(won)
+                roi_returns += prices[selection] if won else 0.0
+
+    n = len(brier_vals)
+    if n == 0:
+        return {"error": "Veri var ancak takımlar için yeterli geçmiş maç bulunamadı. Daha uzun tarih aralığı yükleyin."}
+    event_metrics = {}
+    for event_name, values in special_events.items():
+        if values["pred"]:
+            pred = values["pred"]
+            actual = values["actual"]
+            event_metrics[event_name] = {
+                "tested": len(pred),
+                "mean_predicted_pct": round(sum(pred) / len(pred) * 100.0, 3),
+                "actual_rate_pct": round(sum(actual) / len(actual) * 100.0, 3),
+                "brier": round(sum((p - y) ** 2 for p, y in zip(pred, actual)) / len(pred), 6),
+            }
+    return {
+        "matches_tested": n,
+        "brier_1x2": round(sum(brier_vals) / n, 4),
+        "log_loss_1x2": round(sum(logloss_vals) / n, 4),
+        "top_exact_score_hit_pct": round(sum(exact_hits) / n * 100.0, 2),
+        "htft_tested": htft_rows,
+        "htft_brier": round(sum(combo_brier_vals) / len(combo_brier_vals), 4) if combo_brier_vals else None,
+        "htft_log_loss": round(sum(combo_logloss_vals) / len(combo_logloss_vals), 4) if combo_logloss_vals else None,
+        "special_event_metrics": event_metrics,
+        "bets": roi_stakes,
+        "roi_pct": round((roi_returns - roi_stakes) / roi_stakes * 100, 2) if roi_stakes else None,
+        "bet_hit_pct": round(wins / roi_stakes * 100, 2) if roi_stakes else None,
+        "edge_threshold_pp": edge_threshold_pp,
+        "rows": scores,
+        "warning": "Bu, CSV üzerindeki kronolojik walk-forward temel Poisson testidir. İY/MS metrikleri yalnızca yeterli geçmiş İY verisi mevcut maçlarda hesaplanır. Sonuçlar gelecekteki kârı garanti etmez.",
+    }
+
+def _render_walk_forward_result(bt_result, title="Walk-forward test"):
+    if not isinstance(bt_result, dict):
+        st.error("Backtest sonucu okunamadı.")
+        return
+    if bt_result.get("error"):
+        st.error(bt_result["error"])
+        return
+    st.markdown(f"**{title}**")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Test edilen maç", f"{bt_result['matches_tested']:,}")
+    m2.metric("1X2 Brier (düşük iyi)", bt_result["brier_1x2"])
+    m3.metric("1X2 Log loss (düşük iyi)", bt_result["log_loss_1x2"])
+    m4.metric("Kesin skor top-1 isabet", f"%{bt_result['top_exact_score_hit_pct']}")
+    if bt_result.get("htft_tested", 0):
+        h1, h2, h3 = st.columns(3)
+        h1.metric("İY/MS test edilen", f"{bt_result['htft_tested']:,}")
+        h2.metric("İY/MS Brier (düşük iyi)", bt_result.get("htft_brier") if bt_result.get("htft_brier") is not None else "—")
+        h3.metric("İY/MS Log loss (düşük iyi)", bt_result.get("htft_log_loss") if bt_result.get("htft_log_loss") is not None else "—")
+        event_metrics = bt_result.get("special_event_metrics", {}) or {}
+        if event_metrics:
+            evt_rows = []
+            for name, metric in event_metrics.items():
+                evt_rows.append({
+                    "Senaryo": name,
+                    "Test örneği": metric.get("tested", 0),
+                    "Ortalama model olasılığı %": metric.get("mean_predicted_pct"),
+                    "Gerçekleşme oranı %": metric.get("actual_rate_pct"),
+                    "Brier (düşük iyi)": metric.get("brier"),
+                })
+            st.markdown("**Sürpriz/dönüş olasılığı kalibrasyonu**")
+            st.dataframe(pd.DataFrame(evt_rows), use_container_width=True, hide_index=True)
+    if bt_result.get("bets"):
+        r1, r2, r3 = st.columns(3)
+        r1.metric("Edge eşiğini geçen bahis", bt_result["bets"])
+        r2.metric("Geçmiş ROI", f"%{bt_result['roi_pct']}")
+        r3.metric("Bahis isabeti", f"%{bt_result['bet_hit_pct']}")
+    else:
+        st.info("Belirlenen edge eşiğini geçen ve geçerli oranı bulunan bahis çıkmadı.")
+    st.dataframe(pd.DataFrame(bt_result["rows"]), use_container_width=True, hide_index=True)
+    st.warning(bt_result["warning"])
+
+
+# ══════════════════════════════════════════════════════════════════
+# GEÇMİŞ VERİDE WALK-FORWARD BACKTEST
+# ══════════════════════════════════════════════════════════════════
+with st.expander("📈 Modeli geçmiş maçlarda test et (walk-forward backtest)", expanded=False):
+    st.caption("Tahminler sadece maç tarihinden önceki sonuçlarla üretilir. Böylece gelecek sonuçları geçmiş tahminlere sızdırmayan kronolojik test yapılır.")
+    auto_col, info_col = st.columns([1, 1.5])
+    with auto_col:
+        _auto_couk = FD_ORG_TO_COUK.get(sel_code) if sel_code else None
+        _auto_btn = st.button(
+            f"📥 Seçili ligde son {n_seasons} sezonu indir ve test et",
+            key="walk_forward_auto_history",
+            use_container_width=True,
+            disabled=not bool(_auto_couk),
+        )
+    with info_col:
+        if _auto_couk:
+            st.caption(f"Kaynak: football-data.co.uk · lig kodu {_auto_couk}. İndirme yalnızca düğmeye basınca yapılır.")
+        else:
+            st.caption("Otomatik tarihsel test için football-data.co.uk tarafından desteklenen bir lig seçin veya aşağıya CSV yükleyin.")
+    if _auto_btn and _auto_couk:
+        try:
+            with st.spinner(f"{sel_label} için {n_seasons} sezon geçmiş verisi alınıyor ve kronolojik test çalıştırılıyor..."):
+                _historical_rows = fetch_all_seasons(_auto_couk, n_seasons)
+                if _historical_rows:
+                    _historical_result = walk_forward_backtest(pd.DataFrame(_historical_rows))
+                    st.session_state["walk_forward_auto_history_result"] = {
+                        "signature": (sel_code, n_seasons), "result": _historical_result,
+                        "league": sel_label, "seasons": n_seasons,
+                    }
+                else:
+                    st.session_state["walk_forward_auto_history_result"] = {
+                        "signature": (sel_code, n_seasons),
+                        "result": {"error": "Geçmiş kaynak veri alınamadı. Ağ, kaynak veya lig kodunu kontrol edin."},
+                        "league": sel_label, "seasons": n_seasons,
+                    }
+        except Exception as _auto_bt_exc:
+            st.session_state["walk_forward_auto_history_result"] = {
+                "signature": (sel_code, n_seasons),
+                "result": {"error": f"Otomatik geçmiş test başarısız: {_auto_bt_exc}"},
+                "league": sel_label, "seasons": n_seasons,
+            }
+    _auto_state = st.session_state.get("walk_forward_auto_history_result")
+    if _auto_state and _auto_state.get("signature") == (sel_code, n_seasons):
+        _render_walk_forward_result(
+            _auto_state.get("result", {}),
+            f"Otomatik tarihsel test · {_auto_state.get('league')} · {_auto_state.get('seasons')} sezon",
+        )
+    st.divider()
+    st.caption("Alternatif: football-data.co.uk biçimindeki CSV dosyanızı yükleyin. Tarih, takım ve skor sütunları zorunludur; B365H/B365D/B365A benzeri oran sütunları varsa ROI ayrıca ölçülür.")
+    backtest_file = st.file_uploader("Geçmiş maç CSV", type=["csv"], key="walk_forward_backtest_csv")
+    if backtest_file is not None:
+        try:
+            _bt_df = pd.read_csv(backtest_file)
+            if len(_bt_df.columns) <= 1:
+                backtest_file.seek(0)
+                _bt_df = pd.read_csv(backtest_file, sep=";")
+            with st.spinner("Geçmiş maçlar kronolojik olarak test ediliyor..."):
+                _bt = walk_forward_backtest(_bt_df)
+            _render_walk_forward_result(_bt, "Yüklenen CSV test sonucu")
+        except Exception as _bt_exc:
+            st.error(f"CSV okunamadı veya test başarısız: {_bt_exc}")
+
 # ══════════════════════════════════════════════════════════════════
 # KONTROLLER
 # ══════════════════════════════════════════════════════════════════
@@ -5662,6 +6240,7 @@ if fetch_btn:
         a_sc=find_scorer(scorers,aid)
         oa = None
         matched_odds = None
+        special_odds = None
         score_model = None
         if _form_missing:
             # No generic xG defaults: do not produce a synthetic score model.
@@ -5706,12 +6285,24 @@ if fetch_btn:
                 match_date=_match_date,
                 af_key=apifootball_key
             )
+            # Additional HT/FT and correct-score markets are one-event calls and
+            # are optional to control quota consumption.
+            if (fetch_special_markets and odds_api_key and matched_odds
+                    and matched_odds.get("event_id")):
+                _special_sport = FD_TO_ODDSAPI_SPORT.get(sel_code)
+                special_odds = fetch_odds_api_special_markets(
+                    odds_api_key, _special_sport, matched_odds.get("event_id")
+                )
 
         if matched_odds and not _form_missing:
             oa = analyze_odds(
                 matched_odds["o1"], matched_odds["ox"], matched_odds["o2"],
-                stats, hn, an
+                stats, hn, an, market_consensus=matched_odds.get("consensus_probs")
             )
+            if matched_odds.get("best_price_books"):
+                oa["best_price_books"] = matched_odds["best_price_books"]
+            if matched_odds.get("bookmaker_count") is not None:
+                oa["bookmaker_count"] = matched_odds["bookmaker_count"]
             if matched_odds.get("o25_ov"):
                 oa["o25_ov"] = matched_odds["o25_ov"]
                 oa["o25_un"] = matched_odds.get("o25_un")
@@ -5756,6 +6347,7 @@ if fetch_btn:
             "h_stand":h_s,"a_stand":a_s,"h_sc":h_sc,"a_sc":a_sc,
             "odds_analysis":oa,
             "raw_odds":matched_odds,
+            "special_odds":special_odds,
             "pattern_data":pattern_data,
             "league_name": _m_league_name,
             "league_country": _m_country,
@@ -5973,6 +6565,8 @@ if st.session_state.matches:
                                          odds_source=oa.get("_source","football-data.co.uk"))
                 elif not oa:
                     st.info("💡 Oran verisi bulunamadı. Lig fixtures.csv'de bu maç yoksa sonraki hafta güncellenir.")
+
+                render_special_market_panel(d.get("score_model"), d.get("special_odds"))
 
                 if d.get("form_missing") or not d.get("stats", {}).get("model_available", False):
                     st.info("Bu maç için BANKO / NORMAL / SÜRPRİZ ve skor tablosu kapalı: gerçek form verisi gelmeden tahmin üretilmez.")
