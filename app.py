@@ -71,12 +71,12 @@ def _get_secret(name, env_fallback=None):
         pass
     return os.environ.get(env_fallback or name)
 
-# Kimlik bilgileri yalnızca Streamlit Secrets veya ortam değişkenlerinden okunur.
-# Kaynak kodunda sabit/fallback API anahtarı bulundurulmaz.
-FD_KEY               = _get_secret("FD_KEY", "FOOTBALL_DATA_KEY")
-AF_KEY_DEFAULT       = _get_secret("AF_KEY", "API_FOOTBALL_KEY")
-GROQ_KEY             = _get_secret("GROQ_KEY", "GROQ_API_KEY")
-ODDS_API_KEY_DEFAULT = _get_secret("ODDS_API_KEY", "THE_ODDS_API_KEY")
+# Öncelik sırası: Streamlit Secrets → ortam değişkeni → aşağıdaki yerel fallback.
+# Güvenlik notu: Bu dosyayı public GitHub reposuna yüklemeyin; Secrets/ortam değişkeni kullanmak daha güvenlidir.
+FD_KEY               = _get_secret("FD_KEY", "FOOTBALL_DATA_KEY") or "5cc88bf0dbac4fb699482886eb4c2270"
+AF_KEY_DEFAULT       = _get_secret("AF_KEY", "API_FOOTBALL_KEY") or "b30caea6f2a4c305ff317308de0b917d"
+GROQ_KEY             = _get_secret("GROQ_KEY", "GROQ_API_KEY") or "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"
+ODDS_API_KEY_DEFAULT = _get_secret("ODDS_API_KEY", "THE_ODDS_API_KEY") or "4d4d08c88873623761e05df66d0aeb07"
 
 _REQUIRED_MISSING = [n for n, v in {"FD_KEY": FD_KEY, "GROQ_KEY": GROQ_KEY}.items() if not v]
 
